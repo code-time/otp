@@ -1,9 +1,51 @@
 #!/bin/bash
 
+
+show_help()
+{
+   echo
+   echo "Options:"
+   echo
+   echo "   -h              Show this help message"
+   echo "   -c              Configure the project before running the build"
+   echo "   -nc             Do not copy files before build"
+   echo
+}
+
+run_config=false
+copy_files=true
+
+while [ -n "$1" ]; do 
+    case "$1" in
+        -h) 
+            show_help
+            exit        
+            ;;
+        -c) 
+            run_config=true
+            ;;
+        -nc) 
+            copy_files=false
+            ;;
+	    *) 
+            echo "Option $1 not recognized" ;;
+	esac
+	shift
+done
+
+
 mkdir ~/otp || true
-cp -r ./* ~/otp/
+
+if [ "$copy_files" = true ] ; then
+    cp -r ./* ~/otp/
+fi
 
 cd ~/otp
-./configure
+
+if [ "$run_config" = true ] ; then
+    ./configure
+fi
+
+
 make -j4
-make install
+sudo make install
