@@ -1,0 +1,9 @@
+#!/bin/bash
+
+mkdir ~/otp || true
+cp -r ./* ~/otp/
+
+cd ~/otp
+./configure
+make -j4
+make install
