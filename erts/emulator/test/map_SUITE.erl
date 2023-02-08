@@ -18,13 +18,14 @@
 %%
 -module(map_SUITE).
 -export([all/0, suite/0, init_per_suite/1, end_per_suite/1,
+         init_per_testcase/2, end_per_testcase/2,
          groups/0]).
 
 -export([t_build_and_match_literals/1, t_build_and_match_literals_large/1,
          t_update_literals/1, t_update_literals_large/1,
          t_match_and_update_literals/1, t_match_and_update_literals_large/1,
          t_update_map_expressions/1,
-         t_update_assoc/1, t_update_assoc_large/1,
+         t_update_assoc/1, t_update_assoc_large/1, t_update_assoc_sharing/1,
          t_update_exact/1, t_update_exact_large/1,
          t_guard_bifs/1,
          t_guard_sequence/1, t_guard_sequence_large/1,
@@ -87,8 +88,11 @@
          t_get_map_elements/1,
          y_regs/1,
 
-         %%Bugs
-         t_large_unequal_bins_same_hash_bug/1]).
+         %% Bugs
+         t_large_unequal_bins_same_hash_bug/1,
+
+	 %% Display
+	 t_map_display/1]).
 
 %% Benchmarks
 -export([benchmarks/1]).
@@ -116,7 +120,7 @@ groups() ->
        t_update_literals, t_update_literals_large,
        t_match_and_update_literals, t_match_and_update_literals_large,
        t_update_map_expressions,
-       t_update_assoc, t_update_assoc_large,
+       t_update_assoc, t_update_assoc_large, t_update_assoc_sharing,
        t_update_exact, t_update_exact_large,
        t_guard_bifs,
        t_guard_sequence, t_guard_sequence_large,
@@ -167,7 +171,10 @@ groups() ->
        y_regs,
 
        %% Bugs
-       t_large_unequal_bins_same_hash_bug]},
+       t_large_unequal_bins_same_hash_bug,
+
+       %% Display
+       t_map_display]},
     {benchmarks, [{repeat,10}], [benchmarks]}].
 
 run_once() ->
@@ -195,6 +202,12 @@ end_per_suite(Config) ->
     As = proplists:get_value(started_apps, Config),
     lists:foreach(fun (A) -> application:stop(A) end, As),
     Config.
+
+init_per_testcase(_TestCase, Config) ->
+    Config.
+end_per_testcase(_TestCase, Config) ->
+    erts_test_utils:ept_check_leaked_nodes(Config).
+
 
 %% tests
 
@@ -789,6 +802,9 @@ t_is_map_key(Config) when is_list(Config) ->
     true = is_map_key({1,1.0}, M1),
     true = is_map_key(<<"k2">>, M1),
 
+    true = is_map_key(id(a), M1),
+    true = is_map_key(id("hello"), M1),
+
     %% error cases
     do_badmap(fun(T) ->
 		      {'EXIT',{{badmap,T},[{erlang,is_map_key,_,_}|_]}} =
@@ -1096,6 +1112,51 @@ t_update_assoc_large(Config) when is_list(Config) ->
     M2 = M0#{13.0:=wrong,13.0=>new},
 
     ok.
+
+t_update_assoc_sharing(Config) when is_list(Config) ->
+    Complex = id(#{nested=>map}),
+
+    case erlang:system_info(debug_compiled) of
+        true ->
+            %% the maximum size of a flatmap in a debug-compiled
+            %% system is three
+            M0 = id(#{1=>a,2=>b,complex=>Complex}),
+
+            %% all keys & values are the same
+            M1 = M0#{1=>a,complex=>Complex},
+            true = erts_debug:same(M1, M0),
+            M1 = M0,
+
+            %% only keys are the same
+            M2 = M0#{1=>new_value,complex=>Complex#{extra=>key}},
+            true = same_keys(M0, M2);
+        false ->
+            M0 = id(#{1=>a,2=>b,3.0=>c,4=>d,5=>e,complex=>Complex}),
+
+            %% all keys & values are the same
+            M1 = M0#{1=>a,complex=>Complex},
+            true = erts_debug:same(M1, M0),
+            M1 = M0,
+
+            %% only keys are the same
+            M2 = M0#{1=>new_value,complex=>Complex#{extra=>key}},
+            true = same_keys(M0, M2),
+
+            M3 = M0#{2=>new_value},
+            true = same_keys(M0, M3),
+            #{2:=new_value} = M3,
+
+            M4 = M0#{1=>1,2=>2,3.0=>3,4=>4,5=>5,complex=>6},
+            true = same_keys(M0, M4),
+            #{1:=1,2:=2,3.0:=3,4:=4,5:=5,complex:=6} = M4
+    end,
+
+    ok.
+
+same_keys(M0, M1) ->
+    Keys0 = erts_internal:map_to_tuple_keys(M0),
+    Keys1 = erts_internal:map_to_tuple_keys(M1),
+    erts_debug:same(Keys0, Keys1).
 
 t_update_exact(Config) when is_list(Config) ->
     M0 = id(#{1=>a,2=>b,3.0=>c,4=>d,5=>e}),
@@ -1637,6 +1698,7 @@ t_map_compare(Config) when is_list(Config) ->
     io:format("seed = ~p\n", [rand:export_seed()]),
     repeat(100, fun(_) -> float_int_compare() end, []),
     repeat(100, fun(_) -> recursive_compare() end, []),
+    repeat(10, fun(_) -> atoms_compare() end, []),
     ok.
 
 float_int_compare() ->
@@ -1644,10 +1706,24 @@ float_int_compare() ->
     %%io:format("Keys to use: ~p\n", [Terms]),
     Pairs = lists:map(fun(K) -> list_to_tuple([{K,V} || V <- Terms]) end, Terms),
     lists:foreach(fun(Size) ->
-			  MapGen = fun() -> map_gen(list_to_tuple(Pairs), Size) end,
+			  MapGen = fun() -> map_gen(Pairs, Size) end,
 			  repeat(100, fun do_compare/1, [MapGen, MapGen])
 		  end,
 		  lists:seq(1,length(Terms))),
+    ok.
+
+atoms_compare() ->
+    Atoms = [true, false, ok, '', ?MODULE, list_to_atom(id("a new atom"))],
+    Pairs = lists:map(fun(K) -> list_to_tuple([{K,V} || V <- Atoms]) end,
+                      Atoms),
+    lists:foreach(
+      fun(Size) ->
+              M1 = map_gen(Pairs, Size),
+              M2 = map_gen(Pairs, Size),
+              %%io:format("Atom maps to compare: ~p AND ~p\n", [M1, M2]),
+              do_cmp(M1, M2)
+      end,
+      lists:seq(1,length(Atoms))),
     ok.
 
 numeric_keys(N) ->
@@ -1765,6 +1841,8 @@ cmp_others(I, F, true) when is_integer(I), is_float(F) ->
     -1;
 cmp_others(F, I, true) when is_float(F), is_integer(I) ->
     1;
+cmp_others(A1, A2, Exact) when is_atom(A1), is_atom(A2) ->
+    cmp_others(atom_to_list(A1), atom_to_list(A2), Exact);
 cmp_others(T1, T2, _) ->
     case {T1<T2, T1==T2} of
 	{true,false} -> -1;
@@ -1779,7 +1857,7 @@ map_gen(Pairs, Size) ->
 				KV = element(rand:uniform(size(K)), K),
 				{erlang:delete_element(KI,Keys), [KV | Acc]}
 			end,
-			{Pairs, []},
+			{list_to_tuple(Pairs), []},
 			lists:seq(1,Size)),
 
     maps:from_list(L).
@@ -1791,12 +1869,8 @@ recursive_compare() ->
     %%io:format("Recursive term A = ~p\n", [A]),
     %%io:format("Recursive term B = ~p\n", [B]),
 
-    ?CHECK({true,false} =:=  case do_cmp(A, B, false) of
-				 -1 -> {A<B, A>=B};
-				 0 -> {A==B, A/=B};
-				 1 -> {A>B, A=<B}
-			     end,
-	   {A,B}),
+    do_cmp(A, B),
+
     A2 = copy_term(A),
     ?CHECK(A == A2, {A,A2}),
     ?CHECK(0 =:= cmp(A, A2, false), {A,A2}),
@@ -1806,9 +1880,13 @@ recursive_compare() ->
     ?CHECK(0 =:= cmp(B, B2, false), {B,B2}),
     ok.
 
-do_cmp(A, B, Exact) ->
-    C = cmp(A, B, Exact),
-    C.
+do_cmp(A, B) ->
+    ?CHECK({true,false} =:=  case cmp(A, B, false) of
+				 -1 -> {A<B, A>=B};
+				 0 -> {A==B, A/=B};
+				 1 -> {A>B, A=<B}
+			     end,
+	   {A,B}).
 
 %% Generate two terms {A,B} that may only differ
 %% at float vs integer types.
@@ -2890,6 +2968,10 @@ t_erts_internal_order(_Config) when is_list(_Config) ->
     0  = erts_internal:cmp_term(2147483648,2147483648),
     1  = erts_internal:cmp_term(2147483648,0),
 
+    %% Make sure it's not the internal flatmap order
+    %% where low indexed 'true' < 'a'.
+    -1  = erts_internal:cmp_term(a,true),
+
     M = #{0 => 0,2147483648 => 0},
     true = M =:= binary_to_term(term_to_binary(M)),
     true = M =:= binary_to_term(term_to_binary(M, [deterministic])),
@@ -3471,6 +3553,8 @@ t_large_unequal_bins_same_hash_bug(Config) when is_list(Config) ->
               io:format("~p ~p~n", [erlang:phash2(Map3), maps:size(Map3)])
       end).
 
+
+
 make_map(0) -> 
     #{};
 make_map(Size) ->
@@ -3502,18 +3586,75 @@ run_when_enough_resources(Fun) ->
 total_memory() ->
     %% Total memory in GB.
     try
-	MemoryData = memsup:get_system_memory_data(),
-	case lists:keysearch(total_memory, 1, MemoryData) of
-	    {value, {total_memory, TM}} ->
-		TM div (1024*1024*1024);
-	    false ->
-		{value, {system_total_memory, STM}} =
-		    lists:keysearch(system_total_memory, 1, MemoryData),
-		STM div (1024*1024*1024)
-	end
+	SMD = memsup:get_system_memory_data(),
+        TM = proplists:get_value(
+               available_memory, SMD,
+               proplists:get_value(
+                 total_memory, SMD,
+                 proplists:get_value(
+                   system_total_memory, SMD))),
+        TM div (1024*1024*1024)
     catch
 	_ : _ ->
 	    undefined
+    end.
+
+%% This test case checks that maps larger than 32 elements are readable
+%% when displayed.
+t_map_display(Config) when is_list(Config) ->
+    verify_map_term(make_nontrivial_map(33)),
+    verify_map_term(make_nontrivial_map(253)),
+    verify_map_term({a, make_nontrivial_map(77)}),
+    verify_map_term([make_nontrivial_map(42),
+                     {a,make_nontrivial_map(99)},
+                     make_nontrivial_map(77)]),
+
+    ok.
+
+make_nontrivial_map(N) ->
+    make_nontrivial_map(N, 32).
+
+make_nontrivial_map(N, Effort) ->
+    L = [begin
+             Key = case I rem 64 of
+                       33 when Effort > 16 ->
+                           make_nontrivial_map(I, Effort div 2);
+                       _ ->
+                           I
+                   end,
+             Value = case I rem 5 of
+                         0 ->
+                             I * I;
+                         1 ->
+                             if
+                                 Effort > 16 ->
+                                     make_nontrivial_map(33, Effort div 2);
+                                 true ->
+                                     make_map(Effort)
+                             end;
+                         2 ->
+                             lists:seq(0, I rem 16);
+                         3 ->
+                             list_to_tuple(lists:seq(0, I rem 16));
+                         4 ->
+                             float(I)
+                     end,
+             {Key, Value}
+         end || I <- lists:seq(1, N)],
+    maps:from_list(L).
+
+verify_map_term(Term) ->
+    Printed = string:chomp(erts_debug:display(Term)),
+    {ok,Tokens,1} = erl_scan:string(Printed ++ "."),
+    {ok,ParsedTerm} = erl_parse:parse_term(Tokens),
+
+    case ParsedTerm of
+        Term ->
+            ok;
+        Other ->
+            io:format("Expected:\n~p\n", [Term]),
+            io:format("Got:\n~p", [Other]),
+            ct:fail(failed)
     end.
 
 %%%

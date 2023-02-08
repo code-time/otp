@@ -122,11 +122,16 @@ extern void erts_add_taint(Eterm mod_atom);
 extern Eterm erts_nif_taints(Process* p);
 extern void erts_print_nif_taints(fmtfn_t to, void* to_arg);
 
-/* Loads the specified NIF. The caller must have code write permission. */
+/* Loads the specified NIF. The caller must have code modification
+ * permission. */
 Eterm erts_load_nif(Process *c_p, ErtsCodePtr I, Eterm filename, Eterm args);
 
 void erts_unload_nif(struct erl_module_nif* nif);
 extern void erl_nif_init(void);
+extern void erts_nif_sched_init(ErtsSchedulerData *esdp);
+extern void erts_nif_execute_on_halt(void);
+extern void erts_nif_notify_halt(void);
+extern void erts_nif_wait_calls(void);
 extern int erts_nif_get_funcs(struct erl_module_nif*,
                               struct enif_func_t **funcs);
 extern Module *erts_nif_get_module(struct erl_module_nif*);
@@ -931,13 +936,6 @@ Eterm erts_bld_bin_list(Uint **hpp, Uint *szp, ErlOffHeap* oh, Eterm tail);
 void erts_bif_info_init(void);
 
 /* bif.c */
-
-void erts_queue_monitor_message(Process *,
-				ErtsProcLocks*,
-				Eterm,
-				Eterm,
-				Eterm,
-				Eterm);
 void erts_init_trap_export(Export* ep, Eterm m, Eterm f, Uint a,
 			   Eterm (*bif)(Process*, Eterm*, ErtsCodePtr));
 void erts_init_bif(void);
@@ -957,6 +955,7 @@ Eterm erl_is_function(Process* p, Eterm arg1, Eterm arg2);
 Eterm erts_check_process_code(Process *c_p, Eterm module, int *redsp, int fcalls);
 #define ERTS_CLA_SCAN_WORDS_PER_RED 512
 
+int erts_check_copy_literals_gc_need_max_reds(Process *c_p);
 int erts_check_copy_literals_gc_need(Process *c_p, int *redsp,
                                      char *literals, Uint lit_bsize);
 Eterm erts_copy_literals_gc(Process *c_p, int *redsp, int fcalls);
@@ -1050,9 +1049,9 @@ double erts_get_positive_zero_float(void);
 
 /* config.c */
 
-__decl_noreturn void __noreturn erts_exit_epilogue(void);
+__decl_noreturn void __noreturn erts_exit_epilogue(int flush);
 __decl_noreturn void __noreturn erts_exit(int n, const char*, ...);
-__decl_noreturn void __noreturn erts_flush_async_exit(int n, char*, ...);
+__decl_noreturn void __noreturn erts_flush_exit(int n, char*, ...);
 void erl_error(const char*, va_list);
 
 /* This controls whether sharing-preserving copy is used by Erlang */
@@ -1445,6 +1444,7 @@ void erts_init_bif_binary(void);
 Sint erts_binary_set_loop_limit(Sint limit);
 
 /* erl_bif_persistent.c */
+Eterm erts_persistent_term_get(Eterm key);
 void erts_init_bif_persistent_term(void);
 void erts_init_persistent_dumping(void);
 extern ErtsLiteralArea** erts_persistent_areas;
@@ -1511,7 +1511,7 @@ int erts_utf8_to_latin1(byte* dest, const byte* source, int slen);
 
 void bin_write(fmtfn_t, void*, byte*, size_t);
 Sint intlist_to_buf(Eterm, char*, Sint); /* most callers pass plain char*'s */
-int erts_unicode_list_to_buf(Eterm list, byte *buf, Sint len, Sint* written);
+int erts_unicode_list_to_buf(Eterm list, byte *buf, Sint capacity, Sint len, Sint* written);
 Sint erts_unicode_list_to_buf_len(Eterm list);
 
 int Sint_to_buf(Sint num, int base, char **buf_p, size_t buf_size);

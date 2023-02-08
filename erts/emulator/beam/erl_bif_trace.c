@@ -47,7 +47,7 @@
 const struct trace_pattern_flags   erts_trace_pattern_flags_off = {0, 0, 0, 0, 0};
 
 /*
- * The following variables are protected by code write permission.
+ * The following variables are protected by code modification permission.
  */
 static int                         erts_default_trace_pattern_is_on;
 static Binary                     *erts_default_match_spec;
@@ -55,14 +55,14 @@ static Binary                     *erts_default_meta_match_spec;
 static struct trace_pattern_flags  erts_default_trace_pattern_flags;
 static ErtsTracer                  erts_default_meta_tracer;
 
-static struct {			/* Protected by code write permission */
+static struct {			/* Protected by code modification permission */
     int current;
     int install;
     int local;
     BpFunctions f;		/* Local functions */
     BpFunctions e;		/* Export entries */
     Process* stager;
-    ErtsThrPrgrLaterOp lop;
+    ErtsCodeBarrier barrier;
 } finish_bp;
 
 static Eterm
@@ -130,7 +130,7 @@ trace_pattern(Process* p, Eterm MFA, Eterm Pattern, Eterm flaglist)
     ErtsTracer meta_tracer = erts_tracer_nil;
     Uint freason = BADARG;
 
-    if (!erts_try_seize_code_write_permission(p)) {
+    if (!erts_try_seize_code_mod_permission(p)) {
 	ERTS_BIF_YIELD3(BIF_TRAP_EXPORT(BIF_erts_internal_trace_pattern_3), p, MFA, Pattern, flaglist);
     }
     finish_bp.current = -1;
@@ -350,13 +350,13 @@ trace_pattern(Process* p, Eterm MFA, Eterm Pattern, Eterm flaglist)
 	ASSERT(matches >= 0);
 	ASSERT(finish_bp.stager == NULL);
 	finish_bp.stager = p;
-	erts_schedule_thr_prgr_later_op(smp_bp_finisher, NULL, &finish_bp.lop);
+	erts_schedule_code_barrier(&finish_bp.barrier, smp_bp_finisher, NULL);
 	erts_proc_inc_refc(p);
 	erts_suspend(p, ERTS_PROC_LOCK_MAIN, NULL);
 	ERTS_BIF_YIELD_RETURN(p, make_small(matches));
     }
 
-    erts_release_code_write_permission();
+    erts_release_code_mod_permission();
 
     if (matches >= 0) {
 	return make_small(matches);
@@ -369,15 +369,15 @@ trace_pattern(Process* p, Eterm MFA, Eterm Pattern, Eterm flaglist)
 static void smp_bp_finisher(void* null)
 {
     if (erts_finish_breakpointing()) { /* Not done */
-	/* Arrange for being called again */
-	erts_schedule_thr_prgr_later_op(smp_bp_finisher, NULL, &finish_bp.lop);
+        /* Arrange for being called again */
+        erts_schedule_code_barrier(&finish_bp.barrier, smp_bp_finisher, NULL);
     }
     else {			/* Done */
 	Process* p = finish_bp.stager;
 #ifdef DEBUG
 	finish_bp.stager = NULL;
 #endif
-	erts_release_code_write_permission();
+	erts_release_code_mod_permission();
 	erts_proc_lock(p, ERTS_PROC_LOCK_STATUS);
 	if (!ERTS_PROC_IS_EXITING(p)) {
 	    erts_resume(p, ERTS_PROC_LOCK_STATUS);
@@ -394,8 +394,8 @@ erts_get_default_trace_pattern(int *trace_pattern_is_on,
 			       struct trace_pattern_flags *trace_pattern_flags,
 			       ErtsTracer *meta_tracer)
 {
-    ERTS_LC_ASSERT(erts_has_code_write_permission() ||
-		       erts_thr_progress_is_blocking());
+    ERTS_LC_ASSERT(erts_has_code_mod_permission() ||
+                   erts_thr_progress_is_blocking());
     if (trace_pattern_is_on)
 	*trace_pattern_is_on = erts_default_trace_pattern_is_on;
     if (match_spec)
@@ -410,8 +410,8 @@ erts_get_default_trace_pattern(int *trace_pattern_is_on,
 
 int erts_is_default_trace_enabled(void)
 {
-    ERTS_LC_ASSERT(erts_has_code_write_permission() ||
-		       erts_thr_progress_is_blocking());
+    ERTS_LC_ASSERT(erts_has_code_mod_permission() ||
+                   erts_thr_progress_is_blocking());
     return erts_default_trace_pattern_is_on;
 }
 
@@ -553,7 +553,7 @@ Eterm erts_internal_trace_3(BIF_ALIST_3)
 	BIF_ERROR(p, BADARG | EXF_HAS_EXT_INFO);
     }
 
-    if (!erts_try_seize_code_write_permission(BIF_P)) {
+    if (!erts_try_seize_code_mod_permission(BIF_P)) {
 	ERTS_TRACER_CLEAR(&tracer);
 	ERTS_BIF_YIELD3(BIF_TRAP_EXPORT(BIF_erts_internal_trace_3),
                         BIF_P, BIF_ARG_1, BIF_ARG_2, BIF_ARG_3);
@@ -771,7 +771,7 @@ Eterm erts_internal_trace_3(BIF_ALIST_3)
 	erts_thr_progress_unblock();
 	erts_proc_lock(p, ERTS_PROC_LOCK_MAIN);
     }
-    erts_release_code_write_permission();
+    erts_release_code_mod_permission();
     ERTS_TRACER_CLEAR(&tracer);
 
     BIF_RET(make_small(matches));
@@ -788,7 +788,7 @@ Eterm erts_internal_trace_3(BIF_ALIST_3)
 	erts_thr_progress_unblock();
 	erts_proc_lock(p, ERTS_PROC_LOCK_MAIN);
     }
-    erts_release_code_write_permission();
+    erts_release_code_mod_permission();
 
     BIF_ERROR(p, BADARG);
 }
@@ -804,7 +804,7 @@ Eterm trace_info_2(BIF_ALIST_2)
     Eterm Key = BIF_ARG_2;
     Eterm res;
 
-    if (!erts_try_seize_code_write_permission(p)) {
+    if (!erts_try_seize_code_mod_permission(p)) {
 	ERTS_BIF_YIELD2(BIF_TRAP_EXPORT(BIF_trace_info_2), p, What, Key);
     }
 
@@ -818,10 +818,10 @@ Eterm trace_info_2(BIF_ALIST_2)
 	res = trace_info_func(p, What, Key);
     } else {
         p->fvalue = am_badopt;
-	erts_release_code_write_permission();
+	erts_release_code_mod_permission();
         BIF_ERROR(p, BADARG | EXF_HAS_EXT_INFO);
     }
-    erts_release_code_write_permission();
+    erts_release_code_mod_permission();
 
     if (is_value(res) && is_internal_ref(res))
         BIF_TRAP1(erts_await_result, BIF_P, res);
@@ -1455,8 +1455,8 @@ erts_set_trace_pattern(Process*p, ErtsCodeMFA *mfa, int specified,
             /* Turn on global call tracing */
             if (!erts_is_export_trampoline_active(ep, code_ix)) {
                 fp[i].mod->curr.num_traced_exports++;
-#ifdef DEBUG
-                ep->info.op = BeamOpCodeAddr(op_i_func_info_IaaI);
+#if defined(DEBUG) && !defined(BEAMASM)
+                ep->info.u.op = BeamOpCodeAddr(op_i_func_info_IaaI);
 #endif
                 ep->trampoline.common.op = BeamOpCodeAddr(op_trace_jump_W);
                 ep->trampoline.trace.address =
@@ -1583,13 +1583,13 @@ consolidate_event_tracing(ErtsTracingEvent te[])
 int
 erts_finish_breakpointing(void)
 {
-    ERTS_LC_ASSERT(erts_has_code_write_permission());
+    ERTS_LC_ASSERT(erts_has_code_mod_permission());
 
     /*
-     * Memory barriers will be issued for all schedulers *before*
-     * each of the stages below. (Unless the other schedulers
-     * are blocked, in which case memory barriers will be issued
-     * when they are awaken.)
+     * Memory and instruction barriers will be issued for all schedulers
+     * *before* each of the stages below. (Unless the other schedulers
+     * are blocked, in which case memory barriers will be issued when
+     * they are awakened.)
      */
     switch (finish_bp.current++) {
     case 0:

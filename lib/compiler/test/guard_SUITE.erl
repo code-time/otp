@@ -1360,6 +1360,23 @@ rb(_, _, _) -> false.
 
 
 rel_ops(Config) when is_list(Config) ->
+    TupleUnion = case id(2) of
+                     2 -> {a,id(b)};
+                     3 -> {b,id(b),c}
+                 end,
+    Float = float(id(42)),
+    Int = trunc(id(42.0)),
+
+    IntFunFloat = make_fun(Float),
+    IntFunInt = make_fun(Int),
+
+    FloatFun = make_fun(Float, Float),
+    IntFun = make_fun(Int, Int),
+    MixedFun = make_fun(42, 42.0),
+
+    MixedFun14 = make_fun(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13.0, 14.0),
+    IntFun14 = make_fun(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14),
+
     ?T(=/=, 1, 1.0),
     ?F(=/=, 2, 2),
     ?F(=/=, {a}, {a}),
@@ -1368,9 +1385,50 @@ rel_ops(Config) when is_list(Config) ->
     ?F(/=, 0, 0.0),
     ?T(/=, 0, 1),
     ?F(/=, {a}, {a}),
+    ?F(/=, {a,b}, TupleUnion),
+    ?T(/=, {x,y}, TupleUnion),
+    ?T(/=, TupleUnion, {x,y}),
+    ?F(/=, #{key => Int}, #{key => Float}),
 
+    ?F(/=, #{key => Int}, #{key => Float}),
+    ?F(/=, #{40 => Int}, #{40 => Int}),
+    ?F(/=, #{42 => Float}, #{42 => Int}),
+    ?T(/=, #{100.0 => Float}, #{100 => Float}),
+
+    ?F(/=, FloatFun, FloatFun),
+    ?T(/=, FloatFun, MixedFun14),
+
+    ?T(==, Int, 42.0),
+    ?T(==, Float, 42),
     ?T(==, 1, 1.0),
+    ?T(==, 1.0, 1),
+    ?F(==, Float, a),
+    ?T(==, Float, Float),
     ?F(==, a, {}),
+    ?T(==, TupleUnion, {a,b}),
+    ?F(==, {x,y}, TupleUnion),
+    ?F(==, {a,Float}, TupleUnion),
+
+    ?T(==, #{key => Float}, #{key => Int}),
+    ?T(==, #{40 => Int}, #{40 => Int}),
+    ?T(==, #{42 => Int}, #{42 => Float}),
+    ?F(==, #{100 => Float}, #{100.0 => Float}),
+
+    case ?MODULE of
+        guard_inline_SUITE ->
+            %% Inlining will inline the fun environment into the fun bodies,
+            %% creating funs having no enviroment and different bodies.
+            ok;
+        _ ->
+            ?T(==, IntFunInt, IntFunFloat),
+            ?T(==, FloatFun, FloatFun),
+            ?T(==, FloatFun, IntFun),
+            ?T(==, MixedFun, IntFun),
+            ?T(==, MixedFun, FloatFun),
+            ?T(==, IntFun14, MixedFun14),
+            ?T(==, MixedFun14, IntFun14),
+            ?F(==, IntFun14, IntFun)
+    end,
 
     ?F(=:=, 1, 1.0),
     ?T(=:=, 42.0, 42.0),
@@ -1426,6 +1484,17 @@ rel_ops(Config) when is_list(Config) ->
     false = Arrow(""),
 
     ok.
+
+make_fun(N) ->
+    fun() -> round(N + 0.5) end.
+
+make_fun(A, B) ->
+    fun() -> {A,B} end.
+
+make_fun(A, B, C, D, E, F, G, H, I, J, K, L, M, N) ->
+    fun() ->
+            {A, B, C, D, E, F, G, H, I, J, K, L, M, N}
+    end.
 
 -undef(TestOp).
 
@@ -2547,6 +2616,8 @@ beam_bool_SUITE(_Config) ->
     gh4788(),
     beam_ssa_bool_coverage(),
     bad_map_in_guard(),
+    gh_6164(),
+    gh_6184(),
     ok.
 
 before_and_inside_if() ->
@@ -3057,6 +3128,33 @@ beam_ssa_bool_coverage_1(V) when V andalso 0, tuple_size(0) ->
     ok;
 beam_ssa_bool_coverage_1(_) ->
     error.
+
+gh_6164() ->
+    true = do_gh_6164(id([])),
+    {'EXIT',{{case_clause,42},_}} = catch do_gh_6164(id(0)),
+
+    ok.
+
+do_gh_6164(V1) ->
+    case 42 of
+        V2 ->
+            case is_list(V1) of
+                V3 ->
+                    case V3 orelse V2 of
+                        _ when V3 -> 100
+                    end =< V3
+            end
+    end.
+
+gh_6184() ->
+    {'EXIT',{function_clause,_}} = catch do_gh_6184(id(true), id({a,b,c})),
+    {'EXIT',{function_clause,_}} = catch do_gh_6184(true, true),
+    {'EXIT',{function_clause,_}} = catch do_gh_6184({a,b,c}, {x,y,z}),
+
+    ok.
+
+do_gh_6184(V1, V2) when (false and is_tuple(V2)) andalso (V1 orelse V2) ->
+    V2 orelse V2.
 
 -record(bad_map_in_guard, {name}).
 bad_map_in_guard() ->

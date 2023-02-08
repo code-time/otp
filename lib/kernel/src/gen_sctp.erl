@@ -56,7 +56,9 @@
 -type elementary_option() ::
         {active, true | false | once | -32768..32767} |
         {buffer, non_neg_integer()} |
+        {debug, boolean()} |
         {dontroute, boolean()} |
+        {exclusiveaddruse, boolean()} |
         {high_msgq_watermark, pos_integer()} |
         {linger, {boolean(), non_neg_integer()}} |
         {low_msgq_watermark, pos_integer()} |
@@ -64,6 +66,8 @@
         {priority, non_neg_integer()} |
         {recbuf, non_neg_integer()} |
         {reuseaddr, boolean()} |
+        {reuseport, boolean()} |
+        {reuseport_lb, boolean()} |
 	{ipv6_v6only, boolean()} |
         {sndbuf, non_neg_integer()} |
         {sctp_autoclose, non_neg_integer()} |
@@ -81,7 +85,9 @@
 -type elementary_option_name() ::
         active |
         buffer |
+        debug |
         dontroute |
+        exclusiveaddruse |
         high_msgq_watermark |
         linger |
         low_msgq_watermark |
@@ -89,6 +95,8 @@
         priority |
         recbuf |
         reuseaddr |
+        reuseport |
+        reuseport_lb |
 	ipv6_v6only |
         sctp_autoclose |
         sctp_disable_fragments |

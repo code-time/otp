@@ -63,6 +63,7 @@ MODULES =  \
 	beam_ssa_bc_size \
 	beam_ssa_bool \
 	beam_ssa_bsm \
+	beam_ssa_check \
 	beam_ssa_codegen \
 	beam_ssa_dead \
 	beam_ssa_lint \
@@ -138,6 +139,12 @@ ERL_COMPILE_FLAGS += -Werror
 ERL_COMPILE_FLAGS += +inline +warn_unused_import \
  -I../../stdlib/include -I$(EGEN) -W +warn_missing_spec
 
+ifeq ($(ERL_DETERMINISTIC),yes)
+	DETERMINISM_FLAG = +deterministic
+else
+	DETERMINISM_FLAG =
+endif
+
 # ----------------------------------------------------
 # Targets
 # ----------------------------------------------------
@@ -193,25 +200,30 @@ release_docs_spec:
 # Dependencies -- alphabetically, please
 # ---------------------------------------------------- 
 
-$(EBIN)/beam_asm.beam: beam_asm.hrl
+$(EBIN)/beam_a.beam: beam_asm.hrl beam_types.hrl
+$(EBIN)/beam_asm.beam: beam_asm.hrl beam_opcodes.hrl beam_types.hrl
 $(EBIN)/beam_call_types.beam: beam_types.hrl
 $(EBIN)/beam_block.beam: beam_asm.hrl
-$(EBIN)/beam_disasm.beam: $(EGEN)/beam_opcodes.hrl beam_disasm.hrl beam_asm.hrl
+$(EBIN)/beam_dict.beam: beam_types.hrl
+$(EBIN)/beam_disasm.beam: $(EGEN)/beam_opcodes.hrl beam_disasm.hrl \
+     beam_asm.hrl beam_types.hrl
 $(EBIN)/beam_jump.beam: beam_asm.hrl
 $(EBIN)/beam_kernel_to_ssa.beam: v3_kernel.hrl beam_ssa.hrl
-$(EBIN)/beam_listing.beam: core_parse.hrl v3_kernel.hrl beam_ssa.hrl beam_asm.hrl
+$(EBIN)/beam_listing.beam: core_parse.hrl v3_kernel.hrl beam_ssa.hrl \
+     beam_asm.hrl beam_types.hrl
 $(EBIN)/beam_ssa.beam: beam_ssa.hrl
 $(EBIN)/beam_ssa_bsm.beam: beam_ssa.hrl
 $(EBIN)/beam_ssa_bool.beam: beam_ssa.hrl
+$(EBIN)/beam_ssa_check.beam: beam_ssa.hrl beam_types.hrl
 $(EBIN)/beam_ssa_codegen.beam: beam_ssa.hrl beam_asm.hrl
 $(EBIN)/beam_ssa_dead.beam: beam_ssa.hrl
 $(EBIN)/beam_ssa_lint.beam: beam_ssa.hrl
 $(EBIN)/beam_ssa_opt.beam: beam_ssa.hrl
-$(EBIN)/beam_ssa_pp.beam: beam_ssa.hrl
+$(EBIN)/beam_ssa_pp.beam: beam_ssa.hrl beam_types.hrl
 $(EBIN)/beam_ssa_pre_codegen.beam: beam_ssa.hrl beam_asm.hrl
 $(EBIN)/beam_ssa_recv.beam: beam_ssa.hrl
 $(EBIN)/beam_ssa_share.beam: beam_ssa.hrl
-$(EBIN)/beam_ssa_throw.beam: beam_ssa.hrl
+$(EBIN)/beam_ssa_throw.beam: beam_ssa.hrl beam_types.hrl
 $(EBIN)/beam_ssa_type.beam: beam_ssa.hrl beam_types.hrl
 $(EBIN)/beam_trim.beam: beam_asm.hrl
 $(EBIN)/beam_types.beam: beam_types.hrl

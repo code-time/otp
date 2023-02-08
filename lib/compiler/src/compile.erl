@@ -274,7 +274,10 @@ expand_opt(r23, Os) ->
                               no_recv_opt, no_init_yregs |
                               expand_opt(r24, Os)]);
 expand_opt(r24, Os) ->
-    expand_opt(no_type_opt, [no_bs_create_bin, no_ssa_opt_ranges | Os]);
+    expand_opt(no_type_opt, [no_bs_create_bin, no_ssa_opt_ranges |
+                             expand_opt(r25, Os)]);
+expand_opt(r25, Os) ->
+    [no_ssa_opt_update_tuple, no_bs_match, no_min_max_bifs | Os];
 expand_opt(no_make_fun3, Os) ->
     [no_make_fun3, no_fun_opt | Os];
 expand_opt({debug_info_key,_}=O, Os) ->
@@ -288,6 +291,8 @@ expand_opt(no_type_opt=O, Os) ->
      no_ssa_opt_type_finish | Os];
 expand_opt(no_module_opt=O, Os) ->
     [O,no_recv_opt | Os];
+expand_opt({check_ssa,Tag}, Os) ->
+    [check_ssa, Tag | Os];
 expand_opt(O, Os) -> [O|Os].
 
 -spec format_error(error_description()) -> iolist().
@@ -770,6 +775,16 @@ select_list_passes_1([P|Ps], Opts, Acc) ->
 select_list_passes_1([], _, Acc) ->
     {not_done,reverse(Acc)}.
 
+make_ssa_check_pass(PassFlag) ->
+    F = fun (Code, St) ->
+                case beam_ssa_check:module(Code, PassFlag) of
+                    ok -> {ok, Code, St};
+                    {error, Errors} ->
+                        {error, St#compile{errors=St#compile.errors++Errors}}
+                end
+        end,
+    {iff, PassFlag, {PassFlag, F}}.
+
 %% The standard passes (almost) always run.
 
 standard_passes() ->
@@ -874,6 +889,7 @@ kernel_passes() ->
        {unless,no_bsm_opt,{iff,ssalint,{pass,beam_ssa_lint}}},
 
        {unless,no_ssa_opt,{pass,beam_ssa_opt}},
+       make_ssa_check_pass(post_ssa_opt),
        {iff,dssaopt,{listing,"ssaopt"}},
        {unless,no_ssa_opt,{iff,ssalint,{pass,beam_ssa_lint}}},
 
@@ -1020,12 +1036,19 @@ do_parse_module(DefEncoding, #compile{ifile=File,options=Opts,dir=Dir}=St) ->
             R = epp:parse_file(File,
                                [{includes,[".",Dir|inc_paths(Opts)]},
                                 {source_name, SourceName},
+                                {deterministic, member(deterministic, Opts)},
                                 {macros,pre_defs(Opts)},
                                 {default_encoding,DefEncoding},
                                 {location,StartLocation},
                                 {reserved_word_fun, ResWordFun},
                                 {features, Features},
-                                extra]),
+                                extra|
+                                case member(check_ssa, Opts) of
+                                    true ->
+                                        [{compiler_internal,[ssa_checks]}];
+                                    false ->
+                                        []
+                                end]),
             case R of
                 %% FIXME Extra should include used features as well
                 {ok,Forms0,Extra} ->

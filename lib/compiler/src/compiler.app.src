@@ -39,6 +39,7 @@
              beam_ssa_bc_size,
              beam_ssa_bool,
              beam_ssa_bsm,
+             beam_ssa_check,
              beam_ssa_codegen,
              beam_ssa_dead,
              beam_ssa_lint,
@@ -81,5 +82,5 @@
   {registered, []},
   {applications, [kernel, stdlib]},
   {env, []},
-  {runtime_dependencies, ["stdlib-4.0","kernel-8.4","erts-13.0",
+  {runtime_dependencies, ["stdlib-@OTP-18414@","kernel-8.4","erts-13.0",
 			  "crypto-5.1"]}]}.

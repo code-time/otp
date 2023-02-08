@@ -284,6 +284,7 @@ typedef struct {
 typedef struct {
     ErtsSignal sig;
     ErtsMessage **prev_next;
+    signed char is_yield_mark;
     signed char pass;
     signed char set_save;
     signed char in_sigq;
@@ -416,8 +417,8 @@ typedef struct {
      * the buffer array. This is needed since dirty schedulers are not
      * part of the thread progress system.
      */
-    erts_atomic64_t dirty_refc;
-    Uint nr_of_rounds;
+    erts_refc_t dirty_refc;
+    Uint nr_of_rounds_left;
     Uint nr_of_enqueues;
     int alive;
 } ErtsSignalInQueueBufferArray;

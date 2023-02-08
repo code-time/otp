@@ -129,6 +129,7 @@ reason_phrase(304) ->   "Not Modified" ;
 reason_phrase(305) ->   "Use Proxy" ;
 reason_phrase(306) ->   "(unused)" ;
 reason_phrase(307) ->   "Temporary Redirect" ;
+reason_phrase(308) ->   "Permanent Redirect" ;
 reason_phrase(400) ->   "Bad Request";
 reason_phrase(401) ->   "Unauthorized";
 reason_phrase(402) ->   "Payment Required";
@@ -411,7 +412,7 @@ flatlength(List) ->
 flatlength([H|T],L) when is_list(H) ->
     flatlength(H,flatlength(T,L));
 flatlength([H|T],L) when is_binary(H) ->
-    flatlength(T,L+size(H));
+    flatlength(T,L+byte_size(H));
 flatlength([_H|T],L) ->
     flatlength(T,L+1);
 flatlength([],L) ->

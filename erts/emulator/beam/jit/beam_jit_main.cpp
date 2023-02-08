@@ -26,6 +26,7 @@ extern "C"
 #include "beam_common.h"
 #include "code_ix.h"
 #include "export.h"
+#include "erl_threads.h"
 
 #if defined(__APPLE__)
 #    include <libkern/OSCacheControl.h>
@@ -40,8 +41,10 @@ ErtsFrameLayout ERTS_WRITE_UNLIKELY(erts_frame_layout);
 
 /* Global configuration variables (under the `+J` prefix) */
 #ifdef HAVE_LINUX_PERF_SUPPORT
-int erts_jit_perf_support;
+enum beamasm_perf_flags erts_jit_perf_support;
 #endif
+/* Force use of single-mapped RWX memory for JIT code */
+int erts_jit_single_map = 0;
 
 /*
  * Special Beam instructions.
@@ -53,7 +56,8 @@ ErtsCodePtr beam_exit;
 ErtsCodePtr beam_export_trampoline;
 ErtsCodePtr beam_bif_export_trap;
 ErtsCodePtr beam_continue_exit;
-ErtsCodePtr beam_save_calls;
+ErtsCodePtr beam_save_calls_export;
+ErtsCodePtr beam_save_calls_fun;
 ErtsCodePtr beam_unloaded_fun;
 
 /* NOTE These should be the only variables containing trace instructions.
@@ -85,7 +89,7 @@ static void install_bifs(void) {
     int i;
 
     ASSERT(beam_export_trampoline != NULL);
-    ASSERT(beam_save_calls != NULL);
+    ASSERT(beam_save_calls_export != NULL);
 
     for (i = 0; i < BIF_SIZE; i++) {
         BifEntry *entry;
@@ -96,7 +100,7 @@ static void install_bifs(void) {
 
         ep = erts_export_put(entry->module, entry->name, entry->arity);
 
-        ep->info.op = op_i_func_info_IaaI;
+        sys_memset(&ep->info.u, 0, sizeof(ep->info.u));
         ep->info.mfa.module = entry->module;
         ep->info.mfa.function = entry->name;
         ep->info.mfa.arity = entry->arity;
@@ -120,6 +124,13 @@ static JitAllocator *create_allocator(JitAllocator::CreateParams *params) {
     void *test_ro, *test_rw;
     Error err;
 
+#if defined(__APPLE__) && defined(__aarch64__)
+    /* Using a single map will not work on Apple Silicon. */
+    if (params->options == JitAllocatorOptions::kNone) {
+        return nullptr;
+    }
+#endif
+
     auto *allocator = new JitAllocator(params);
 
     err = allocator->alloc(&test_ro, &test_rw, 1);
@@ -140,16 +151,20 @@ static JitAllocator *pick_allocator() {
 #if defined(HAVE_LINUX_PERF_SUPPORT)
     /* `perf` has a hard time showing symbols for dual-mapped memory, so we'll
      * use single-mapped memory when enabled. */
-    if (erts_jit_perf_support & (BEAMASM_PERF_DUMP | BEAMASM_PERF_MAP)) {
+    if (erts_jit_perf_support & BEAMASM_PERF_ENABLED) {
+        erts_jit_single_map = 1;
+    }
+#endif
+
+    if (erts_jit_single_map) {
         if (auto *alloc = create_allocator(&single_params)) {
             return alloc;
         }
 
         ERTS_INTERNAL_ERROR("jit: Failed to allocate executable+writable "
-                            "memory. Either allow this or disable the "
-                            "'+JPperf' option.");
+                            "memory. Either allow this or disable both the "
+                            "'+JPperf' and '+JMsingle' options.");
     }
-#endif
 
 #if !defined(VALGRIND)
     /* Default to dual-mapped memory with separate executable and writable
@@ -220,7 +235,7 @@ void beamasm_init() {
      * frame pointers are disabled or unsupported. */
 #if defined(ERLANG_FRAME_POINTERS)
 #    ifdef HAVE_LINUX_PERF_SUPPORT
-    if (erts_jit_perf_support & BEAMASM_PERF_MAP) {
+    if (erts_jit_perf_support & BEAMASM_PERF_FP) {
         erts_frame_layout = ERTS_FRAME_LAYOUT_FP_RA;
     } else {
         erts_frame_layout = ERTS_FRAME_LAYOUT_RA;
@@ -324,7 +339,8 @@ void beamasm_init() {
     /* These instructions rely on register contents, and can only be reached
      * from a `call_ext_*`-instruction or trapping from the emulator, hence the
      * lack of wrapper functions. */
-    beam_save_calls = (ErtsCodePtr)bga->get_dispatch_save_calls();
+    beam_save_calls_export = (ErtsCodePtr)bga->get_dispatch_save_calls_export();
+    beam_save_calls_fun = (ErtsCodePtr)bga->get_dispatch_save_calls_fun();
     beam_export_trampoline = (ErtsCodePtr)bga->get_export_trampoline();
 
     /* Used when trappping to Erlang code from the emulator, setting up
@@ -365,21 +381,47 @@ extern "C"
     }
 
     void beamasm_flush_icache(const void *address, size_t size) {
-#if defined(__aarch64__)
-#    if defined(WIN32)
+#ifdef DEBUG
+        erts_debug_require_code_barrier();
+#endif
+
+#if defined(__aarch64__) && defined(WIN32)
+        /* Issues full memory/instruction barriers on all threads for us. */
         FlushInstructionCache(GetCurrentProcess(), address, size);
-#    elif defined(__APPLE__)
+#elif defined(__aarch64__) && defined(__APPLE__)
+        /* Issues full memory/instruction barriers on all threads for us. */
         sys_icache_invalidate((char *)address, size);
-#    elif defined(__GNUC__)
-        __builtin___clear_cache(&((char *)address)[0],
-                                &((char *)address)[size]);
-#    else
-#        error "Platform lacks implementation for clearing instruction cache." \
-                "Please report this bug."
-#    endif
-#else
+#elif defined(__aarch64__) && defined(__GNUC__) &&                             \
+        defined(ETHR_HAVE_GCC_ASM_ARM_IC_IVAU_INSTRUCTION) &&                  \
+        defined(ETHR_HAVE_GCC_ASM_ARM_DC_CVAU_INSTRUCTION) &&                  \
+        defined(ERTS_THR_INSTRUCTION_BARRIER)
+        /* Note that we do not issue any barriers here, whether instruction or
+         * memory. This is on purpose as we must issue those on all schedulers
+         * and not just the calling thread, and the chances of us forgetting to
+         * do that is much higher if we issue them here. */
+        UWord start = reinterpret_cast<UWord>(address);
+        UWord end = start + size;
+
+        ETHR_COMPILER_BARRIER;
+
+        for (size_t i = start & ~ERTS_CACHE_LINE_MASK; i < end;
+             i += ERTS_CACHE_LINE_SIZE) {
+            __asm__ __volatile__("dc cvau, %0\n"
+                                 "ic ivau, %0\n" ::"r"(i)
+                                 :);
+        }
+#elif (defined(__x86_64__) || defined(_M_X64)) &&                              \
+        defined(ERTS_THR_INSTRUCTION_BARRIER)
+        /* We don't need to invalidate cache on this platform, but since we
+         * might be modifying code with a different linear address than the one
+         * we execute from (dual-mapped memory), we still need to issue an
+         * instruction barrier on all schedulers to ensure that the change is
+         * visible. */
         (void)address;
         (void)size;
+#else
+#    error "Platform lacks implementation for clearing instruction cache." \
+                "Please report this bug."
 #endif
     }
 

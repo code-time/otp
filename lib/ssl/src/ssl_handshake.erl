@@ -89,6 +89,8 @@
          validation_fun_and_state/4,
          path_validation_alert/1]).
 
+%% Tracing
+-export([handle_trace/3]).
 %%====================================================================
 %% Create handshake messages 
 %%====================================================================
@@ -337,10 +339,9 @@ next_protocol(SelectedProtocol) ->
 %% Description: Handles a certificate handshake message
 %%--------------------------------------------------------------------
 certify(#certificate{asn1_certificates = ASN1Certs}, CertDbHandle, CertDbRef,
-        #{server_name_indication := ServerNameIndication,
-          partial_chain := PartialChain} = SSlOptions, 
+        #{partial_chain := PartialChain} = SSlOptions,
         CRLDbHandle, Role, Host, Version, CertExt) ->
-    ServerName = server_name(ServerNameIndication, Host, Role),
+    ServerName = server_name(SSlOptions, Host, Role),
     [PeerCert | _ChainCerts ] = ASN1Certs,
     try
 	PathsAndAnchors  =
@@ -358,7 +359,8 @@ certify(#certificate{asn1_certificates = ASN1Certs}, CertDbHandle, CertDbRef,
         error:{_,{error, {asn1, Asn1Reason}}} ->
             %% ASN-1 decode of certificate somehow failed
             ?ALERT_REC(?FATAL, ?CERTIFICATE_UNKNOWN, {failed_to_decode_certificate, Asn1Reason});
-        error:OtherReason ->
+        error:OtherReason:ST ->
+            ?SSL_LOG(info, internal_error, [{error, OtherReason}, {stacktrace, ST}]),
             ?ALERT_REC(?FATAL, ?INTERNAL_ERROR, {unexpected_error, OtherReason})
     end.
 %%--------------------------------------------------------------------
@@ -427,7 +429,8 @@ master_secret(Version, #session{master_secret = Mastersecret},
     try master_secret(Version, Mastersecret, SecParams,
 		      ConnectionStates, Role)
     catch
-	exit:_ ->
+	exit:Reason:ST ->
+            ?SSL_LOG(info, handshake_error, [{error, Reason}, {stacktrace, ST}]),
             ?ALERT_REC(?FATAL, ?HANDSHAKE_FAILURE, key_calculation_failure)
     end;
 
@@ -443,7 +446,8 @@ master_secret(Version, PremasterSecret, ConnectionStates, Role) ->
 					 ClientRandom, ServerRandom),
 		      SecParams, ConnectionStates, Role)
     catch
-	exit:_ ->
+	exit:Reason:ST ->
+            ?SSL_LOG(info, handshake_error, [{error, Reason}, {stacktrace, ST}]),
             ?ALERT_REC(?FATAL, ?HANDSHAKE_FAILURE, master_secret_calculation_failure)
     end.
 
@@ -1134,26 +1138,27 @@ supported_ecc(_) ->
     #elliptic_curves{elliptic_curve_list = []}.
 
 premaster_secret(OtherPublicDhKey, MyPrivateKey, #'DHParameter'{} = Params) ->
-    try 
-	public_key:compute_key(OtherPublicDhKey, MyPrivateKey, Params)  
-    catch 
-	error:computation_failed -> 
+    try
+	public_key:compute_key(OtherPublicDhKey, MyPrivateKey, Params)
+    catch
+	error:Reason:ST ->
+            ?SSL_LOG(debug, crypto_error, [{reason, Reason}, {stacktrace, ST}]),
 	    throw(?ALERT_REC(?FATAL, ?ILLEGAL_PARAMETER))
-    end;	   
+    end;
 premaster_secret(PublicDhKey, PrivateDhKey, #server_dh_params{dh_p = Prime, dh_g = Base}) ->
-    try 
+    try
 	crypto:compute_key(dh, PublicDhKey, PrivateDhKey, [Prime, Base])
-    catch 
-	error:computation_failed -> 
+    catch
+	error:Reason:ST ->
+            ?SSL_LOG(debug, crypto_error, [{reason, Reason}, {stacktrace, ST}]),
 	    throw(?ALERT_REC(?FATAL, ?ILLEGAL_PARAMETER))
     end;
 premaster_secret(#client_srp_public{srp_a = ClientPublicKey}, ServerKey, #srp_user{prime = Prime,
 										   verifier = Verifier}) ->
-    try crypto:compute_key(srp, ClientPublicKey, ServerKey, {host, [Verifier, Prime, '6a']}) of
-	PremasterSecret ->
-	    PremasterSecret
+    try crypto:compute_key(srp, ClientPublicKey, ServerKey, {host, [Verifier, Prime, '6a']})
     catch
-	error:_ ->
+	error:Reason:ST ->
+            ?SSL_LOG(debug, crypto_error, [{reason, Reason}, {stacktrace, ST}]),
 	    throw(?ALERT_REC(?FATAL, ?ILLEGAL_PARAMETER))
     end;
 premaster_secret(#server_srp_params{srp_n = Prime, srp_g = Generator, srp_s = Salt, srp_b = Public},
@@ -1161,14 +1166,13 @@ premaster_secret(#server_srp_params{srp_n = Prime, srp_g = Generator, srp_s = Sa
     case ssl_srp_primes:check_srp_params(Generator, Prime) of
 	ok ->
 	    DerivedKey = crypto:hash(sha, [Salt, crypto:hash(sha, [Username, <<$:>>, Password])]),
-	    try crypto:compute_key(srp, Public, ClientKeys, {user, [DerivedKey, Prime, Generator, '6a']}) of
-		PremasterSecret ->
-		    PremasterSecret
+	    try crypto:compute_key(srp, Public, ClientKeys, {user, [DerivedKey, Prime, Generator, '6a']})
             catch
-		error ->
+		error:Reason:ST ->
+                    ?SSL_LOG(debug, crypto_error, [{reason, Reason}, {stacktrace, ST}]),
 		    throw(?ALERT_REC(?FATAL, ?ILLEGAL_PARAMETER))
 	    end;
-	_ ->
+	not_accepted ->
 	    throw(?ALERT_REC(?FATAL, ?ILLEGAL_PARAMETER))
     end;
 premaster_secret(#client_rsa_psk_identity{
@@ -1214,14 +1218,16 @@ premaster_secret(EncSecret, #'RSAPrivateKey'{} = RSAPrivateKey) ->
     try public_key:decrypt_private(EncSecret, RSAPrivateKey,
 				   [{rsa_pad, rsa_pkcs1_padding}])
     catch
-	_:_ ->
+	_:Reason:ST ->
+            ?SSL_LOG(debug, decrypt_error, [{reason, Reason}, {stacktrace, ST}]),
 	    throw(?ALERT_REC(?FATAL, ?DECRYPT_ERROR))
     end;
 premaster_secret(EncSecret, #{algorithm := rsa} = Engine) ->
     try crypto:private_decrypt(rsa, EncSecret, maps:remove(algorithm, Engine),
 				   [{rsa_pad, rsa_pkcs1_padding}])
     catch
-	_:_ ->
+	_:Reason:ST ->
+            ?SSL_LOG(debug, decrypt_error, [{reason, Reason}, {stacktrace, ST}]),
 	    throw(?ALERT_REC(?FATAL, ?DECRYPT_ERROR))
     end.
 %%====================================================================
@@ -1237,12 +1243,11 @@ client_hello_extensions(Version, CipherSuites, SslOpts, ConnectionStates, Renego
 
 add_tls12_extensions(_Version,
                      #{alpn_advertised_protocols := AlpnAdvertisedProtocols,
-                      next_protocol_selector := NextProtocolSelector,
-                      server_name_indication := ServerNameIndication,
-                      max_fragment_length := MaxFragmentLength} = SslOpts,
+                       max_fragment_length := MaxFragmentLength} = SslOpts,
                      ConnectionStates,
                      Renegotiation) ->
     SRP = srp_user(SslOpts),
+    NextProtocolSelector = maps:get(next_protocol_selector, SslOpts, undefined),
     #{renegotiation_info => renegotiation_info(tls_record, client,
                                                ConnectionStates, Renegotiation),
       srp => SRP,
@@ -1250,7 +1255,7 @@ add_tls12_extensions(_Version,
       next_protocol_negotiation =>
           encode_client_protocol_negotiation(NextProtocolSelector,
                                              Renegotiation),
-      sni => sni(ServerNameIndication),
+      sni => sni(SslOpts),
       max_frag_enum => max_frag_enum(MaxFragmentLength)
      }.
 
@@ -1294,8 +1299,7 @@ add_common_extensions(Version,
 
 maybe_add_tls13_extensions({3,4},
                            HelloExtensions0,
-                           #{versions := SupportedVersions,
-                             certificate_authorities := Bool},
+                           #{versions := SupportedVersions} = Opts,
                            KeyShare,
                            TicketData, CertDbHandle, CertDbRef) ->
     HelloExtensions1 =
@@ -1303,7 +1307,8 @@ maybe_add_tls13_extensions({3,4},
                               #client_hello_versions{versions = SupportedVersions}},
     HelloExtensions2 = maybe_add_key_share(HelloExtensions1, KeyShare),
     HelloExtensions = maybe_add_pre_shared_key(HelloExtensions2, TicketData),
-    maybe_add_certificate_auths(HelloExtensions, CertDbHandle, CertDbRef, Bool);
+    AddCA = maps:get(certificate_authorities, Opts, false),
+    maybe_add_certificate_auths(HelloExtensions, CertDbHandle, CertDbRef, AddCA);
 
 maybe_add_tls13_extensions(_, HelloExtensions, _, _, _, _,_) ->
     HelloExtensions.
@@ -1515,8 +1520,7 @@ handle_client_hello_extensions(RecordCB, Random, ClientCipherSuites,
 handle_server_hello_extensions(RecordCB, Random, CipherSuite, Compression,
                                Exts, Version,
 			       #{secure_renegotiate := SecureRenegotation,
-                                 next_protocol_selector := NextProtoSelector,
-                                 ocsp_stapling := Stapling},
+                                 ocsp_stapling := Stapling} = SslOpts,
 			       ConnectionStates0, Renegotiation, IsNew) ->
     ConnectionStates = handle_renegotiation_extension(client, RecordCB, Version,  
                                                       maps:get(renegotiation_info, Exts, undefined), Random, 
@@ -1555,7 +1559,8 @@ handle_server_hello_extensions(RecordCB, Random, CipherSuite, Compression,
                     {ConnectionStates, alpn, undefined, OcspState};
                 undefined ->
                     NextProtocolNegotiation = maps:get(next_protocol_negotiation, Exts, undefined),
-                    Protocol = handle_next_protocol(NextProtocolNegotiation, NextProtoSelector, Renegotiation),
+                    NextProtocolSelector = maps:get(next_protocol_selector, SslOpts, undefined),
+                    Protocol = handle_next_protocol(NextProtocolNegotiation, NextProtocolSelector, Renegotiation),
                     {ConnectionStates, npn, Protocol, OcspState};
                 {error, Reason} ->
                     ?ALERT_REC(?FATAL, ?HANDSHAKE_FAILURE, Reason);
@@ -2045,8 +2050,8 @@ validation_fun_and_state(undefined, VerifyState, CertPath, LogLevel) ->
 apply_user_fun(Fun, OtpCert, VerifyResult0, UserState0, SslState, CertPath, LogLevel) when
       (VerifyResult0 == valid) or (VerifyResult0 == valid_peer) ->
     VerifyResult = maybe_check_hostname(OtpCert, VerifyResult0, SslState),
-    case Fun(OtpCert, VerifyResult, UserState0) of
-	{Valid, UserState} when (Valid == valid) or (Valid == valid_peer) ->
+    case apply_fun(Fun, OtpCert, VerifyResult, UserState0, CertPath) of
+	{Valid, UserState} when (Valid == valid) orelse (Valid == valid_peer) ->
 	    case cert_status_check(OtpCert, SslState, VerifyResult, CertPath, LogLevel) of
 		valid ->
 		    {Valid, {SslState, UserState}};
@@ -2056,14 +2061,22 @@ apply_user_fun(Fun, OtpCert, VerifyResult0, UserState0, SslState, CertPath, LogL
 	{fail, _} = Fail ->
 	    Fail
     end;
-apply_user_fun(Fun, OtpCert, ExtensionOrError, UserState0, SslState, _CertPath, _LogLevel) ->
-    case Fun(OtpCert, ExtensionOrError, UserState0) of
-	{Valid, UserState} when (Valid == valid) or (Valid == valid_peer)->
+apply_user_fun(Fun, OtpCert, ExtensionOrError, UserState0, SslState, CertPath, _LogLevel) ->
+    case apply_fun(Fun, OtpCert, ExtensionOrError, UserState0, CertPath) of
+	{Valid, UserState} when (Valid == valid) orelse (Valid == valid_peer)->
 	    {Valid, {SslState, UserState}};
 	{fail, _} = Fail ->
 	    Fail;
 	{unknown, UserState} ->
 	    {unknown, {SslState, UserState}}
+    end.
+
+apply_fun(Fun, OtpCert, ExtensionOrError, UserState, CertPath) ->
+    if is_function(Fun, 4) ->
+            #cert{der=DerCert} = lists:keyfind(OtpCert, #cert.otp, CertPath),
+            Fun(OtpCert, DerCert, ExtensionOrError, UserState);
+       is_function(Fun, 3) ->
+            Fun(OtpCert, ExtensionOrError, UserState)
     end.
 
 maybe_check_hostname(OtpCert, valid_peer, SslState) ->
@@ -2101,11 +2114,10 @@ path_validation_alert(Reason) ->
 
 
 digitally_signed(Version, Msg, HashAlgo, PrivateKey, SignAlgo) ->
-    try do_digitally_signed(Version, Msg, HashAlgo, PrivateKey, SignAlgo) of
-	Signature ->
-	    Signature
+    try do_digitally_signed(Version, Msg, HashAlgo, PrivateKey, SignAlgo)
     catch
-	error:_ ->
+	error:Reason:ST ->
+            ?SSL_LOG(info, sign_error, [{error, Reason}, {stacktrace, ST}]),
 	    throw(?ALERT_REC(?FATAL, ?HANDSHAKE_FAILURE, bad_key(PrivateKey)))
     end.
 
@@ -2288,7 +2300,8 @@ encrypted_premaster_secret(Secret, RSAPublicKey) ->
 						      rsa_pkcs1_padding}]),
 	#encrypted_premaster_secret{premaster_secret = PreMasterSecret}
     catch
-        _:_->
+        _:Reason:ST->
+            ?SSL_LOG(debug, encrypt_error, [{reason, Reason}, {stacktrace, ST}]),
             throw(?ALERT_REC(?FATAL, ?HANDSHAKE_FAILURE, premaster_encryption_failed))
     end.
 
@@ -3112,18 +3125,10 @@ decode_sign_alg({3,3}, SignSchemeList) ->
                                   {true, {Hash, Sign}};
                               {Hash, rsa_pss_pss = Sign, _} ->
                                   {true,{Hash, Sign}};
-                              {sha1, rsa_pkcs1, _} ->
-                                  {true,{sha, rsa}};
                               {Hash, rsa_pkcs1, _} ->
                                   {true,{Hash, rsa}};
-                              {sha1, ecdsa, _} ->
-                                  {true,{sha, ecdsa}};
-                              {sha512,ecdsa, _} ->
-                                  {true,{sha512, ecdsa}};
-                              {sha384,ecdsa, _} ->
-                                  {true,{sha384, ecdsa}};
-                              {sha256,ecdsa, _}->
-                                  {true,{sha256, ecdsa}};
+                              {Hash, ecdsa, _} ->
+                                  {true,{Hash, ecdsa}};
                               _ ->
                                   false
                           end;
@@ -3471,10 +3476,9 @@ handle_next_protocol_extension(NextProtocolNegotiation, Renegotiation, SslOpts)-
 
 handle_next_protocol_on_server(undefined, _Renegotiation, _SslOpts) ->
     undefined;
-
 handle_next_protocol_on_server(#next_protocol_negotiation{extension_data = <<>>},
-			       false, #{next_protocols_advertised := Protocols}) ->
-    Protocols;
+			       false, SslOpts) ->
+    maps:get(next_protocols_advertised, SslOpts, undefined);
 
 handle_next_protocol_on_server(_Hello, _Renegotiation, _SSLOpts) ->
     ?ALERT_REC(?FATAL, ?HANDSHAKE_FAILURE, unexpected_next_protocol_extension).
@@ -3507,21 +3511,6 @@ is_acceptable_cert_type(Sign, Types) ->
 is_supported_sign(SignAlgo, _, HashSigns, []) ->
     ssl_cipher:is_supported_sign(SignAlgo, HashSigns);
 %% {'SignatureAlgorithm',{1,2,840,113549,1,1,11},'NULL'}
-is_supported_sign({Hash, Sign}, 'NULL', _, SignatureSchemes) ->
-    Fun = fun (Scheme, Acc) ->
-                  {H0, S0, _} = ssl_cipher:scheme_to_components(Scheme),
-                  S1 = case S0 of
-                             rsa_pkcs1 -> rsa;
-                             S -> S
-                         end,
-                  H1 = case H0 of
-                             sha1 -> sha;
-                             H -> H
-                         end,
-                  Acc orelse (Sign =:= S1 andalso
-                              Hash =:= H1)
-          end,
-    lists:foldl(Fun, false, SignatureSchemes);
 %% TODO: Implement validation for the curve used in the signature
 %% RFC 3279 - 2.2.3 ECDSA Signature Algorithm
 %% When the ecdsa-with-SHA1 algorithm identifier appears as the
@@ -3533,20 +3522,15 @@ is_supported_sign({Hash, Sign}, 'NULL', _, SignatureSchemes) ->
 %% the certificate of the issuer SHALL apply to the verification of the
 %% signature.
 is_supported_sign({Hash, Sign}, _Param, _, SignatureSchemes) ->
-    Fun = fun (Scheme, Acc) ->
-                  {H0, S0, _} = ssl_cipher:scheme_to_components(Scheme),
+    Fun = fun (Scheme) ->
+                  {H, S0, _} = ssl_cipher:scheme_to_components(Scheme),
                   S1 = case S0 of
                              rsa_pkcs1 -> rsa;
                              S -> S
                          end,
-                  H1 = case H0 of
-                             sha1 -> sha;
-                             H -> H
-                         end,
-                  Acc orelse (Sign  =:= S1 andalso
-                              Hash  =:= H1)
+                  (Sign  =:= S1) andalso (Hash  =:= H)
           end,
-    lists:foldl(Fun, false, SignatureSchemes).
+    lists:any(Fun, SignatureSchemes).
 
 
 %% SupportedSignatureAlgorithms SIGNATURE-ALGORITHM-CLASS ::= {
@@ -3579,10 +3563,13 @@ sign_type(ecdsa) ->
 
 server_name(_, _, server) ->
     undefined; %% Not interesting to check your own name.
-server_name(undefined, Host, client) ->
-    {fallback, Host}; %% Fallback to Host argument to connect
-server_name(SNI, _, client) ->
-    SNI. %% If Server Name Indication is available
+server_name(SSLOpts, Host, client) ->
+    case maps:get(server_name_indication, SSLOpts, undefined) of
+        undefined ->
+            {fallback, Host}; %% Fallback to Host argument to connect
+        SNI ->
+            SNI  %% If Server Name Indication is available
+    end.
 
 client_ecc_extensions(SupportedECCs) ->
     CryptoSupport = proplists:get_value(public_keys, crypto:supports()),
@@ -3641,12 +3628,12 @@ select_shared_curve([Curve | Rest], Curves) ->
 	    select_shared_curve(Rest, Curves)
     end.
 
-sni(undefined) ->
-    undefined;
-sni(disable) ->
-    undefined;
-sni(Hostname) ->
-    #sni{hostname = Hostname}.
+sni(SslOpts) ->
+    case maps:get(server_name_indication, SslOpts, undefined) of
+        undefined -> undefined;
+        disable -> undefined;
+        Hostname -> #sni{hostname = Hostname}
+    end.
 
 %% convert max_fragment_length (in bytes) to the RFC 6066 ENUM
 max_frag_enum(?MAX_FRAGMENT_LENGTH_BYTES_1) ->
@@ -3872,8 +3859,7 @@ path_validation(TrustedCert, Path, ServerName, Role, CertDbHandle, CertDbRef, CR
                 #{verify_fun := VerifyFun,
                   customize_hostname_check := CustomizeHostnameCheck,
                   crl_check := CrlCheck,
-                  log_level := Level,
-                  depth := Depth} = Opts,
+                  log_level := Level} = Opts,
                 #{cert_ext := CertExt,
                   ocsp_responder_certs := OcspResponderCerts,
                   ocsp_state := OcspState}) ->
@@ -3896,7 +3882,7 @@ path_validation(TrustedCert, Path, ServerName, Role, CertDbHandle, CertDbRef, CR
                                               ocsp_responder_certs => OcspResponderCerts,
                                               ocsp_state => OcspState},
                                  Path, Level),
-    Options = [{max_path_length, Depth},
+    Options = [{max_path_length, maps:get(depth, Opts, ?DEFAULT_DEPTH)},
                {verify_fun, ValidationFunAndState}],
     public_key:pkix_path_validation(TrustedCert, Path, Options).
 
@@ -3909,3 +3895,15 @@ path_validation_cb({3,4}) ->
     tls_handshake_1_3;
 path_validation_cb(_) ->
     ?MODULE.
+
+%%%################################################################
+%%%#
+%%%# Tracing
+%%%#
+handle_trace(csp,
+             {call, {?MODULE, maybe_add_certificate_status_request,
+                     [_Version, #{ocsp_stapling := true},
+                      _OcspNonce, _HelloExtensions]}},
+             Stack) ->
+    {io_lib:format("#1 ADDING certificate status request",
+                   []), Stack}.

@@ -92,6 +92,8 @@ BITS64 = @BITS64@
 
 OTP_RELEASE = @OTP_RELEASE@
 
+ERL_DETERMINISTIC = @ERL_DETERMINISTIC@
+
 # ----------------------------------------------------
 #	Erlang language section
 # ----------------------------------------------------
@@ -99,10 +101,15 @@ EMULATOR = beam
 ifeq ($(ERL_COMPILE_WARNINGS_AS_ERRORS),yes)
   ERL_COMPILE_FLAGS += -Werror
 endif
-ifdef BOOTSTRAP
+ifdef PRIMARY_BOOTSTRAP
   ERL_COMPILE_FLAGS += +slim
 else
   ERL_COMPILE_FLAGS += +debug_info
+endif
+ifeq ($(ERL_DETERMINISTIC),yes)
+  ERL_COMPILE_FLAGS += +deterministic
+  YRL_FLAGS += +deterministic
+  XRL_FLAGS += +deterministic
 endif
 
 ERLC_WFLAGS = -W

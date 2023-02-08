@@ -63,6 +63,11 @@ atom undefined_lambda
 # and should never leak out to be seen by the user.
 atom ErtsSecretAtom='3RT$'
 
+#
+# Other commonly used atoms.
+#
+atom nil no none
+
 # All other atoms.  Try to keep the order alphabetic.
 #
 atom DOWN='DOWN'
@@ -90,6 +95,7 @@ atom allocator
 atom allocator_sizes
 atom alloc_util_allocators
 atom allow_passive_connect
+atom already_exists
 atom already_loaded
 atom amd64
 atom anchored
@@ -104,6 +110,7 @@ atom arg0
 atom arity
 atom asn1
 atom async
+atom async_dist
 atom asynchronous
 atom atom
 atom atom_used
@@ -172,6 +179,7 @@ atom cflags
 atom CHANGE='CHANGE'
 atom characters_to_binary_int
 atom characters_to_list_int
+atom check_gc
 atom clear
 atom clock_service
 atom close
@@ -189,6 +197,7 @@ atom convert_time_unit
 atom connect
 atom connected
 atom connection_closed
+atom connection_id
 atom const
 atom context_switches
 atom continue_exit
@@ -245,6 +254,7 @@ atom dsend_continue_trap
 atom duplicate_bag
 atom duplicated
 atom dupnames
+atom dynamic_node_name
 atom einval
 atom emu_flavor
 atom emu_type
@@ -253,6 +263,7 @@ atom enable_trace
 atom enabled
 atom endian
 atom env
+atom ensure_at_least ensure_exactly
 atom eof
 atom eol
 atom Eq='=:='
@@ -321,6 +332,7 @@ atom get_all_trap
 atom get_internal_state_blocked
 atom get_seq_token
 atom get_size
+atom get_tail
 atom get_tcw
 atom gather_gc_info_result
 atom gather_io_bytes
@@ -351,6 +363,7 @@ atom ignore
 atom in
 atom in_exiting
 atom inactive
+atom include_shared_binaries
 atom incomplete
 atom inconsistent
 atom index
@@ -599,6 +612,7 @@ atom return_time_trace
 atom return_to
 atom return_to_trace
 atom return_trace
+atom reuse
 atom run_process
 atom run_queue
 atom run_queue_lengths
@@ -641,6 +655,7 @@ atom set_tcw_fake
 atom short
 atom shutdown
 atom sighup
+atom signed
 atom sigterm
 atom sigusr1
 atom sigusr2
@@ -655,6 +670,7 @@ atom sigtstp
 atom sigquit
 atom silent
 atom size
+atom skip
 atom spawn_executable
 atom spawn_driver
 atom spawn_init

@@ -36,7 +36,7 @@
 -export([dmonitor_node/3]).
 -export([delay_trap/2]).
 -export([set_cookie/1, set_cookie/2, get_cookie/0, get_cookie/1]).
--export([nodes/0]).
+-export([nodes/0, nodes/1, nodes/2]).
 
 -export([integer_to_list/2]).
 -export([integer_to_binary/2]).
@@ -216,7 +216,7 @@
 -export([crc32/2, crc32_combine/3, date/0, decode_packet/3]).
 -export([delete_element/2]).
 -export([delete_module/1, demonitor/1, demonitor/2, display/1]).
--export([display_nl/0, display_string/1, erase/0, erase/1]).
+-export([display_string/1, display_string/2, erase/0, erase/1]).
 -export([error/1, error/2, error/3, exit/1, exit/2, exit_signal/2, external_size/1]).
 -export([external_size/2, finish_after_on_load/2, finish_loading/1, float/1]).
 -export([float_to_binary/1, float_to_binary/2,
@@ -269,7 +269,7 @@
          is_list/1, is_map/1, is_number/1, is_pid/1, is_port/1, is_record/2,
          is_record/3, is_reference/1, is_tuple/1, load_module/2,
          load_nif/2, localtime_to_universaltime/2, make_fun/3,
-         make_tuple/2, make_tuple/3, nodes/1, open_port/2,
+         make_tuple/2, make_tuple/3, open_port/2,
          port_call/2, port_call/3, port_info/1, port_info/2, process_flag/2,
          process_info/2, send/2, send/3, seq_trace_info/1,
          setelement/3,
@@ -843,15 +843,21 @@ unalias(_Alias) ->
 display(_Term) ->
     erlang:nif_error(undefined).
 
-%% display_nl/0
--spec erlang:display_nl() -> true.
-display_nl() ->
-    erlang:nif_error(undefined).
-
 %% display_string/1
 -spec erlang:display_string(P1) -> true when
+      P1 :: string() | binary().
+display_string(String) ->
+    try erlang:display_string(stderr, String)
+    catch error:badarg:ST ->
+            [{erlang, display_string, _, [ErrorInfo]}|_] = ST,
+            erlang:error(badarg, [String], [ErrorInfo])
+    end.
+
+%% display_string/2
+-spec erlang:display_string(Device, P1) -> true when
+      Device :: stdin | stdout | stderr,
       P1 :: string().
-display_string(_P1) ->
+display_string(_Stream,_P1) ->
     erlang:nif_error(undefined).
 
 %% dt_append_vm_tag_data/1
@@ -1204,8 +1210,13 @@ halt() ->
 
 %% halt/1
 %% Shadowed by erl_bif_types: erlang:halt/1
--spec halt(Status) -> no_return() when
-      Status :: non_neg_integer() | 'abort' | string().
+-spec halt(Status :: non_neg_integer()) ->
+          no_return();
+          (Abort :: abort) ->
+          no_return();
+          (CrashDumpSlogan :: string()) ->
+          no_return().
+
 -dialyzer({no_return, halt/1}).
 halt(Status) ->
     try
@@ -1216,11 +1227,18 @@ halt(Status) ->
 
 %% halt/2
 %% Shadowed by erl_bif_types: erlang:halt/2
--spec halt(Status, Options) -> no_return() when
-      Status :: non_neg_integer() | 'abort' | string(),
-      Options :: [Option],
-      Option :: {flush, boolean()}.
-halt(_Status, _Options) ->
+-type halt_options() ::
+        [{flush, boolean()}].
+
+-spec halt(Status :: non_neg_integer(), Options :: halt_options()) ->
+          no_return();
+          (Abort :: abort, Options :: halt_options()) ->
+          no_return();
+          (CrashDumpSlogan :: string(), Options :: halt_options()) ->
+          no_return().
+
+-dialyzer({no_return, halt/2}).
+halt(_, _) ->
     erlang:nif_error(undefined).
 
 %% has_prepared_code_on_load/1
@@ -1279,7 +1297,7 @@ iolist_to_iovec(_IoListOrBinary) ->
 %% is_alive/0
 -spec is_alive() -> boolean().
 is_alive() ->
-    erlang:whereis(net_kernel) =/= undefined.
+    erlang:node() =/= nonode@nohost orelse erts_internal:dynamic_node_name().
 
 %% is_builtin/3
 -spec erlang:is_builtin(Module, Function, Arity) -> boolean() when
@@ -2197,8 +2215,9 @@ get_module_info(_Module, _Item) ->
     erlang:nif_error(undefined).
 
 %% Shadowed by erl_bif_types: erlang:hd/1
--spec hd(List) -> term() when
-      List :: [term(), ...].
+-spec hd(List) -> Head when
+      List :: nonempty_maybe_improper_list(),
+      Head :: term().
 hd(_List) ->
     erlang:nif_error(undefined).
 
@@ -2384,13 +2403,6 @@ make_tuple(_Arity,_InitialValue) ->
 make_tuple(_Arity,_DefaultValue,_InitList) ->
     erlang:nif_error(undefined).
 
--spec nodes(Arg) -> Nodes when
-      Arg :: NodeType | [NodeType],
-      NodeType :: visible | hidden | connected | this | known,
-      Nodes :: [node()].
-nodes(_Arg) ->
-    erlang:nif_error(undefined).
-
 -spec open_port(PortName, PortSettings) -> port() when
       PortName :: {spawn, Command :: string() | binary()} |
                   {spawn_driver, Command :: string() | binary()} |
@@ -2432,7 +2444,10 @@ open_port(PortName, PortSettings) ->
 -type message_queue_data() ::
 	off_heap | on_heap.
 
--spec process_flag(trap_exit, Boolean) -> OldBoolean when
+-spec process_flag(async_dist, Boolean) -> OldBoolean when
+      Boolean :: boolean(),
+      OldBoolean :: boolean();
+                  (trap_exit, Boolean) -> OldBoolean when
       Boolean :: boolean(),
       OldBoolean :: boolean();
                   (error_handler, Module) -> OldModule when
@@ -2470,6 +2485,7 @@ process_flag(_Flag, _Value) ->
     erlang:nif_error(undefined).
 
 -type process_info_item() ::
+      async_dist |
       backtrace |
       binary |
       catchlevel |
@@ -2506,6 +2522,7 @@ process_flag(_Flag, _Value) ->
       trap_exit.
 
 -type process_info_result_item() ::
+      {async_dist, Enabled :: boolean()} |
       {backtrace, Bin :: binary()} |
       {binary, BinInfo :: [{non_neg_integer(),
                             non_neg_integer(),
@@ -2781,8 +2798,9 @@ term_to_iovec(_Term, _Options) ->
     erlang:nif_error(undefined).
 
 %% Shadowed by erl_bif_types: erlang:tl/1
--spec tl(List) -> term() when
-      List :: nonempty_maybe_improper_list().
+-spec tl(List) -> Tail when
+      List :: nonempty_maybe_improper_list(),
+      Tail :: term().
 tl(_List) ->
     erlang:nif_error(undefined).
 
@@ -2956,6 +2974,7 @@ tuple_to_list(_Tuple) ->
          (update_cpu_info) -> changed | unchanged;
          (version) -> string();
          (wordsize | {wordsize, internal} | {wordsize, external}) -> 4 | 8;
+         (async_dist) -> boolean();
          (overview) -> boolean();
          %% Deliberately left undocumented
          (sequential_tracer) -> {sequential_tracer, pid() | port() | {module(),term()} | false}.
@@ -3074,7 +3093,8 @@ spawn_monitor(M, F, A) ->
         %% TODO change size => to := when -type maps support is finalized
       | #{ size => non_neg_integer(),
            kill => boolean(),
-           error_logger => boolean() }.
+           error_logger => boolean(),
+           include_shared_binaries => boolean() }.
 
 -type spawn_opt_option() ::
 	link
@@ -3085,7 +3105,8 @@ spawn_monitor(M, F, A) ->
       | {min_heap_size, Size :: non_neg_integer()}
       | {min_bin_vheap_size, VSize :: non_neg_integer()}
       | {max_heap_size, Size :: max_heap_size()}
-      | {message_queue_data, MQD :: message_queue_data()}.
+      | {message_queue_data, MQD :: message_queue_data()}
+      | {async_dist, Enabled :: boolean()}.
 
 -spec spawn_opt(Fun, Options) -> pid() | {pid(), reference()} when
       Fun :: function(),
@@ -3467,7 +3488,28 @@ yield() ->
 -spec nodes() -> Nodes when
       Nodes :: [node()].
 nodes() ->
-    erlang:nodes(visible).
+    erlang:nif_error(undefined).
+
+-spec nodes(Arg) -> Nodes when
+      Arg :: NodeType | [NodeType],
+      NodeType :: visible | hidden | connected | this | known,
+      Nodes :: [node()].
+nodes(_Arg) ->
+    erlang:nif_error(undefined).
+
+-spec nodes(Arg, InfoOpts) -> [NodeInfo] when
+      NodeType :: visible | hidden | connected | this | known,
+      Arg :: NodeType | [NodeType],
+      InfoOpts :: #{connection_id => boolean(),
+                    node_type => boolean()},
+      NodeTypeInfo :: visible | hidden | this | known,
+      ConnectionId :: undefined | integer(),
+      Info :: #{connection_id => ConnectionId,
+                node_type => NodeTypeInfo},
+      NodeInfo :: {node(), Info}.
+
+nodes(_Args, _Opts) ->
+    erlang:nif_error(undefined).
 
 -spec disconnect_node(Node) -> boolean() | ignored when
       Node :: node().
@@ -4009,6 +4051,8 @@ rvrs([X|Xs],Ys) -> rvrs(Xs, [X|Ys]).
       Term1 :: term(),
       Term2 :: term(),
       Minimum :: term().
+%% In Erlang/OTP 26, min/2 is a guard BIF. This implementation is kept
+%% for backward compatibility with code compiled with an earlier version.
 min(A, B) when A > B -> B;
 min(A, _) -> A.
 
@@ -4017,6 +4061,8 @@ min(A, _) -> A.
       Term1 :: term(),
       Term2 :: term(),
       Maximum :: term().
+%% In Erlang/OTP 26, max/2 is a guard BIF. This implementation is kept
+%% for backward compatibility with code compiled with an earlier version.
 max(A, B) when A < B -> B;
 max(A, _) -> A.
 

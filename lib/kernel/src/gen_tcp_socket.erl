@@ -915,6 +915,12 @@ socket_setopt(Socket, DomainProps, Value) when is_list(DomainProps) ->
 
 socket_setopt_value({socket,linger}, {OnOff, Linger}) ->
     #{onoff => OnOff, linger => Linger};
+socket_setopt_value({socket,bindtodevice}, DeviceBin)
+  when is_binary(DeviceBin) ->
+    %% Currently: 
+    %% prim_inet: Require that device is a binary()
+    %% socket:    Require that device is a string()
+    binary_to_list(DeviceBin);
 socket_setopt_value(_Opt, Value) -> Value.
 
 
@@ -1145,7 +1151,7 @@ call(Server, Call) ->
     end.
 
 stop_server(Server) ->
-    try gen_statem:stop(Server) of
+    try gen_statem:stop(Server, {shutdown, closed}, infinity) of
         _ -> ok
     catch
         _:_ -> ok
@@ -1768,9 +1774,12 @@ handle_shutdown2(Socket, NextState, How) ->
 
 
 handle_unexpected(Type, Content, State, {P, _D}) ->
-    warning_report([{socket,        P#params.socket},
-                    {unknown_event, {Type, Content}},
-                    {state,         State}]),
+    warning_msg("Received unexpected event:"
+                "~n   Socket:     ~p"
+                "~n   State:      ~p"
+                "~n   Event Type: ~p"
+                "~n   Content:    ~p",
+                [P#params.socket, State, Type, Content]),
     case Type of
         {call, From} ->
             {keep_state_and_data,
@@ -1785,9 +1794,12 @@ handle_closed(Type, Content, State, {P, _D}) ->
             {keep_state_and_data,
              [{reply, From, {error, closed}}]};
         _ ->
-            warning_report([{socket,        P#params.socket},
-                            {unknown_event, {Type, Content}},
-                            {state,         State}]),
+            warning_msg("Received unexpected event when closed:"
+                        "~n   Socket:     ~p"
+                        "~n   State:      ~p"
+                        "~n   Event Type: ~p"
+                        "~n   Content:    ~p",
+                        [P#params.socket, State, Type, Content]),
             keep_state_and_data
     end.
 
@@ -2854,8 +2866,8 @@ warning_msg(F, A) ->
 error_report(Report) ->
     error_logger:error_report(Report).
 
-warning_report(Report) ->
-    error_logger:warning_report([{module, ?MODULE}|Report]).
+%% warning_report(Report) ->
+%%     error_logger:warning_report([{module, ?MODULE}|Report]).
 
 
 

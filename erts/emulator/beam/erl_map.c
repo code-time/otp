@@ -152,28 +152,38 @@ void erts_init_map(void) {
  */
 
 BIF_RETTYPE map_size_1(BIF_ALIST_1) {
-    if (is_flatmap(BIF_ARG_1)) {
-	flatmap_t *mp = (flatmap_t*)flatmap_val(BIF_ARG_1);
-	BIF_RET(make_small(flatmap_get_size(mp)));
-    } else if (is_hashmap(BIF_ARG_1)) {
-	Eterm *head;
-	Uint size;
+    Sint size = erts_map_size(BIF_ARG_1);
 
-	head = hashmap_val(BIF_ARG_1);
-	size = head[1];
+    /* NOTE: The JIT has its own implementation of this BIF. */
 
-        /*
-         * As long as a small has 28 bits (on a 32-bit machine) for
-         * the integer itself, it is impossible to build a map whose
-         * size would not fit in a small. Add an assertion in case we
-         * ever decreases the number of bits in a small.
-         */
-        ASSERT(IS_USMALL(0, size));
-        BIF_RET(make_small(size));
+    if (size < 0) {
+        BIF_P->fvalue = BIF_ARG_1;
+        BIF_ERROR(BIF_P, BADMAP);
     }
 
-    BIF_P->fvalue = BIF_ARG_1;
-    BIF_ERROR(BIF_P, BADMAP);
+    /*
+     * As long as a small has 28 bits (on a 32-bit machine) for
+     * the integer itself, it is impossible to build a map whose
+     * size would not fit in a small. Add an assertion in case we
+     * ever decreases the number of bits in a small.
+     */
+    ASSERT(IS_USMALL(0, size));
+    BIF_RET(make_small(size));
+}
+
+Sint
+erts_map_size(Eterm map)
+{
+    if (is_flatmap(map)) {
+	flatmap_t *mp = (flatmap_t*)flatmap_val(map);
+	return (Sint) flatmap_get_size(mp);
+    }
+    else if (is_hashmap(map)) {
+	Eterm *head = hashmap_val(map);
+	return (Sint) head[1];
+    }
+
+    return -1;
 }
 
 /* maps:find/2
@@ -262,6 +272,7 @@ BIF_RETTYPE maps_get_2(BIF_ALIST_2) {
 }
 
 BIF_RETTYPE map_get_2(BIF_ALIST_2) {
+    /* NOTE: The JIT has its own implementation of this BIF. */
     BIF_RET(maps_get_2(BIF_CALL_ARGS));
 }
 
@@ -427,7 +438,9 @@ static Eterm flatmap_from_validated_list(Process *p, Eterm list, Eterm fill_valu
 
 	idx = size;
 
-	while(idx > 0 && (c = CMP_TERM(key,ks[idx-1])) < 0) { idx--; }
+	while(idx > 0 && (c = erts_cmp_flatmap_keys(key,ks[idx-1])) < 0) {
+            idx--;
+        }
 
 	if (c == 0) {
 	    /* last compare was equal,
@@ -662,44 +675,80 @@ Eterm erts_hashmap_from_array(ErtsHeapFactory* factory, Eterm *leafs, Uint n,
     return res;
 }
 
-Eterm erts_map_from_ks_and_vs(ErtsHeapFactory *factory, Eterm *ks0, Eterm *vs0, Uint n)
+static ERTS_INLINE Eterm
+from_ks_and_vs(ErtsHeapFactory *factory, Eterm *ks, Eterm *vs,
+               Uint n, Eterm *key_tuple, flatmap_t **fmpp)
 {
     if (n <= MAP_SMALL_MAP_LIMIT) {
-        Eterm *ks, *vs, *hp;
-	flatmap_t *mp;
+        Eterm *hp;
+	flatmap_t *fmp;
 	Eterm keys;
 
-        hp    = erts_produce_heap(factory, 3 + (n==0 ? 0 : 1) + (2 * n), 0);
-        if (n == 0) {
-            keys  = ERTS_GLOBAL_LIT_EMPTY_TUPLE;
-        } else {
-            keys  = make_tuple(hp);
-            *hp++ = make_arityval(n);
+        if (key_tuple && is_value(*key_tuple)) {
+            keys = *key_tuple;
+            hp = erts_produce_heap(factory, MAP_HEADER_FLATMAP_SZ + n, 0);
+            ASSERT(is_tuple_arity(keys, n));
+            ASSERT(n == 0 || sys_memcmp((void *) (tuple_val(keys) + 1),
+                                        (void *) ks,
+                                        n * sizeof(Eterm)) == 0);
         }
-	ks    = hp;
-	hp   += n;
-	mp    = (flatmap_t*)hp;
-	hp   += MAP_HEADER_FLATMAP_SZ;
-	vs    = hp;
+        else if (n == 0) {
+            keys = ERTS_GLOBAL_LIT_EMPTY_TUPLE;
+            if (key_tuple)
+                *key_tuple = keys;
+            hp = erts_produce_heap(factory, MAP_HEADER_FLATMAP_SZ + n, 0);
+        }
+        else {
+            hp = erts_produce_heap(factory, 1 + MAP_HEADER_FLATMAP_SZ + 2*n, 0);
+            keys = make_tuple(hp);
+            if (key_tuple) {
+                *key_tuple = keys;
+            }
+            *hp++ = make_arityval(n);
+            sys_memcpy((void *) hp,
+                       (void *) ks,
+                       n * sizeof(Eterm));
+            hp += n;
+        }
 
-        mp->thing_word = MAP_HEADER_FLATMAP;
-	mp->size = n;
-	mp->keys = keys;
+	fmp = (flatmap_t*)hp;
+	hp += MAP_HEADER_FLATMAP_SZ;
 
-        sys_memcpy(ks, ks0, n * sizeof(Eterm));
-        sys_memcpy(vs, vs0, n * sizeof(Eterm));
+        fmp->thing_word = MAP_HEADER_FLATMAP;
+	fmp->size = n;
+	fmp->keys = keys;
 
-        if (!erts_validate_and_sort_flatmap(mp)) {
+        sys_memcpy((void *) hp, (void *) vs, n * sizeof(Eterm));
+
+        if (fmpp) {
+            *fmpp = fmp;
             return THE_NON_VALUE;
         }
-
-        return make_flatmap(mp);
+        return make_flatmap(fmp);
     } else {
-        return erts_hashmap_from_ks_and_vs(factory, ks0, vs0, n);
+        if (fmpp) {
+            *fmpp = NULL;
+        }
+        return erts_hashmap_from_ks_and_vs(factory, ks, vs, n);
     }
-    return THE_NON_VALUE;
 }
 
+Eterm erts_map_from_ks_and_vs(ErtsHeapFactory *factory, Eterm *ks, Eterm *vs, Uint n)
+{
+    Eterm res;
+    flatmap_t *fmp;
+
+    res = from_ks_and_vs(factory, ks, vs, n, NULL, &fmp);
+    if (fmp) {
+        if (erts_validate_and_sort_flatmap(fmp)) {
+            res = make_flatmap(fmp);
+        }
+        else {
+            res = THE_NON_VALUE;
+        }
+    }
+    return res;
+}
 
 Eterm erts_hashmap_from_ks_and_vs_extra(ErtsHeapFactory *factory,
                                         Eterm *ks, Eterm *vs, Uint n,
@@ -1193,6 +1242,7 @@ BIF_RETTYPE maps_is_key_2(BIF_ALIST_2) {
 }
 
 BIF_RETTYPE is_map_key_2(BIF_ALIST_2) {
+    /* NOTE: The JIT has its own implementation of this BIF. */
     BIF_RET(maps_is_key_2(BIF_CALL_ARGS));
 }
 
@@ -1320,7 +1370,7 @@ static Eterm flatmap_merge(Process *p, Eterm nodeA, Eterm nodeB) {
     vs2 = flatmap_get_values(mp2);
 
     while(i1 < n1 && i2 < n2) {
-	c = CMP_TERM(ks1[i1],ks2[i2]);
+	c = (ks1[i1] == ks2[i2]) ? 0 : erts_cmp_flatmap_keys(ks1[i1],ks2[i2]);
 	if (c == 0) {
 	    /* use righthand side arguments map value,
 	     * but advance both maps */
@@ -2098,7 +2148,7 @@ Eterm erts_maps_put(Process *p, Eterm key, Eterm value, Eterm map) {
 	ASSERT(n >= 0);
 
 	/* copy map in order */
-	while (n && ((c = CMP_TERM(*ks, key)) < 0)) {
+	while (n && ((c = erts_cmp_flatmap_keys(*ks, key)) < 0)) {
 	    *shp++ = *ks++;
 	    *hp++  = *vs++;
 	    n--;
@@ -2996,7 +3046,7 @@ int erts_validate_and_sort_flatmap(flatmap_t* mp)
 
     for (ix = 1; ix < sz; ix++) {
 	jx = ix;
-	while( jx > 0 && (c = CMP_TERM(ks[jx],ks[jx-1])) <= 0 ) {
+	while( jx > 0 && (c = erts_cmp_flatmap_keys(ks[jx],ks[jx-1])) <= 0 ) {
 	    /* identical key -> error */
 	    if (c == 0) return 0;
 
@@ -3027,7 +3077,7 @@ void erts_usort_flatmap(flatmap_t* mp)
 
     for (ix = 1; ix < sz; ix++) {
 	jx = ix;
-	while( jx > 0 && (c = CMP_TERM(ks[jx],ks[jx-1])) <= 0 ) {
+	while( jx > 0 && (c = erts_cmp_flatmap_keys(ks[jx],ks[jx-1])) <= 0 ) {
 	    /* identical key -> remove it */
 	    if (c == 0) {
                 sys_memmove(ks+jx-1,ks+jx,(sz-ix)*sizeof(Eterm));
@@ -3436,6 +3486,60 @@ BIF_RETTYPE erts_internal_map_next_3(BIF_ALIST_3) {
         type = list;
     } else {
         BIF_ERROR(BIF_P, BADARG);
+    }
+
+    /* Handle an ordered iterator. */
+    if (type == iterator && (is_list(path) || is_nil(path))) {
+#ifdef DEBUG
+#define ORDERED_ITER_FACTOR 200
+#else
+#define ORDERED_ITER_FACTOR 32
+#endif
+        int orig_elems = MAX(1, ERTS_BIF_REDS_LEFT(BIF_P) / ORDERED_ITER_FACTOR);
+        int elems = orig_elems;
+        Uint needed = 4 * elems + 2;
+        Eterm *hp = HAlloc(BIF_P, needed);
+        Eterm *hp_end = hp + needed;
+        Eterm result = am_none;
+        Eterm *patch_ptr = &result;
+
+        while (is_list(path) && elems > 0) {
+            Eterm *lst = list_val(path);
+            Eterm key = CAR(lst);
+            Eterm res = make_tuple(hp);
+            const Eterm *value = erts_maps_get(key, map);
+            if (!value) {
+            ordered_badarg:
+                HRelease(BIF_P, hp_end, hp);
+                BIF_ERROR(BIF_P, BADARG);
+            }
+            hp[0] = make_arityval(3);
+            hp[1] = key;
+            hp[2] = *value;
+            *patch_ptr = res;
+            patch_ptr = &hp[3];
+            hp += 4;
+            path = CDR(lst);
+            elems--;
+        }
+
+        if (is_list(path)) {
+            Eterm next = CONS(hp, path, map);
+            hp += 2;
+            ASSERT(hp == hp_end);
+            *patch_ptr = next;
+            BUMP_ALL_REDS(BIF_P);
+            ASSERT(is_tuple(result));
+            BIF_RET(result);
+        } else if (is_nil(path)) {
+            HRelease(BIF_P, hp_end, hp);
+            *patch_ptr = am_none;
+            BUMP_REDS(BIF_P, ORDERED_ITER_FACTOR * (orig_elems - elems));
+            ASSERT(result == am_none || is_tuple(result));
+            BIF_RET(result);
+        } else {
+            goto ordered_badarg;
+        }
     }
 
     if (is_flatmap(map)) {

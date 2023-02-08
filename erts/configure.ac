@@ -1659,6 +1659,16 @@ AC_CHECK_MEMBERS([struct ifreq.ifr_enaddr], [], [],
 	])
 
 dnl ----------------------------------------------------------------------
+dnl Checks for types.
+dnl ----------------------------------------------------------------------
+
+AC_CHECK_TYPES([struct ip_mreqn], [], [],
+               [
+                #include <netinet/in.h>
+               ])
+
+
+dnl ----------------------------------------------------------------------
 dnl  Check the availability of systemd
 dnl ----------------------------------------------------------------------
 AS_IF([test x"$enable_systemd" != x"no"],
@@ -1700,9 +1710,9 @@ AS_IF([test x"$ac_cv_lib_dlpi_dlpi_open" = x"no"],
    try_dlpi_lib=$erl_xcomp_sysroot/lib
    if test x"$ac_cv_sizeof_void_p" = x"8"; then
       if test -d  $erl_xcomp_sysroot/lib64; then
-	 try_dlpi_lib= $erl_xcomp_sysroot/lib64
+	 try_dlpi_lib=$erl_xcomp_sysroot/lib64
       elif test -d  $erl_xcomp_sysroot/lib/64; then
-	 try_dlpi_lib= $erl_xcomp_sysroot/lib/64
+	 try_dlpi_lib=$erl_xcomp_sysroot/lib/64
       fi
    fi
    if test ! -f "$try_dlpi_lib/libdlpi.so" && \
@@ -3458,26 +3468,6 @@ AC_DEFINE_UNQUOTED(ERTS_EMU_CMDLINE_FLAGS,
 
 AC_SUBST(STATIC_CFLAGS)
 
-dnl ----------------------------------------------------------------------
-dnl Directories needed for the build
-dnl ----------------------------------------------------------------------
-
-erts=${erl_top}/erts
-
-erts_dirs="								
-  $erts/obj $erts/obj.debug
-									
-  $erts/obj/$host
-  $erts/obj.debug/$host
-
-"
-for d in ${erl_top}/bin ${erl_top}/bin/$host $erts_dirs ;
-do
-  if test ! -d $d; then
-    mkdir -p 1>/dev/null 2>&1 $d
-  fi
-done
-
 dnl ---------------------------------------------------------------------
 dnl Autoheader macro for adding code at top and bottom of config.h.in
 dnl ---------------------------------------------------------------------
@@ -3569,6 +3559,19 @@ esac
 CFLAGS="$CFLAGS $sanitizers"
 LDFLAGS="$LDFLAGS $sanitizers"
 ])
+
+dnl ----------------------------------------------------------------------
+dnl Enable build determinism flag
+dnl ----------------------------------------------------------------------
+
+AC_ARG_ENABLE(deterministic-build,
+AS_HELP_STRING([--enable-deterministic-build], [enable build determinism, stripping absolute paths from build output]),
+[ case "$enableval" in
+    no)  ERL_DETERMINISTIC=no ;;
+    *) ERL_DETERMINISTIC=yes ;;
+  esac ],
+ERL_DETERMINISTIC=no)
+AC_SUBST(ERL_DETERMINISTIC)
 
 AC_MSG_CHECKING([CFLAGS for -O switch])
 dnl                               Remove all "-O*" options

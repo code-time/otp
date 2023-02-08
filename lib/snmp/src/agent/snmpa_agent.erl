@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2021. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2023. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -76,8 +76,6 @@
 -ifndef(default_verbosity).
 -define(default_verbosity,silence).
 -endif.
-
--define(empty_pdu_size, 21).
 
 -ifdef(snmp_extended_verbosity).
 -define(vt(F,A), ?vtrace(F, A)).
@@ -482,29 +480,6 @@ start_mib_server(Prio, Ref, Mibs, Options) ->
 	    ?vinfo("failed starting mib server: ~n~p",[Error]),
 	    throw({error, {mib_server_failed, Error}})
     end.
-
-
-%%-----------------------------------------------------------------
-%% Purpose: We must calculate the length of an empty Pdu.  This
-%%          length is used to calculate the max pdu size allowed
-%%          for each get-bulk-request. This size is 
-%%          dependent on the varbinds. It is calculated
-%%          as EmptySize + 8.  8 comes from the fact that the
-%%          maximum pdu size needs 31 bits which needs 5 * 7 bits to be
-%%          expressed. One 7bit octet is already present in the
-%%          empty pdu, leaving 4 more 7bit octets. The length is
-%%          repeated twice, once for the varbinds, and once for the
-%%          entire pdu; 2 * 4 = 8.
-%% Actually, this function is not used, we use a constant instead.
-%%-----------------------------------------------------------------
-%% Ret: 21
-%% empty_pdu() ->
-%%     Pdu = #pdu{type         = 'get-response', 
-%%                request_id   = 1,
-%% 	          error_status = noError, 
-%%                error_index  = 0, 
-%%                varbinds     = []},
-%%     length(snmp_pdus:enc_pdu(Pdu)) + 8.
 
 
 %%%--------------------------------------------------
@@ -1747,7 +1722,7 @@ handle_pdu(Vsn, Pdu, PduMS, ACMData, Address, GbMaxVBs, Extra, Dict) ->
 handle_pdu2(Vsn, Pdu, PduMS, ACMData, Address, GbMaxVBs, Extra) ->
     %% OTP-3324
     AuthMod = get(auth_module),
-    case AuthMod:init_check_access(Pdu, ACMData) of
+    try AuthMod:init_check_access(Pdu, ACMData) of
 	{ok, MibView, ContextName} ->
 	    ?vlog("handle_pdu -> ok:"
 		  "~n   MibView:     ~p"
@@ -1765,6 +1740,13 @@ handle_pdu2(Vsn, Pdu, PduMS, ACMData, Address, GbMaxVBs, Extra) ->
 		  "~n   Reason:   ~p", [Variable, Reason]),
 	    get(net_if) ! {discarded_pdu, Vsn, Pdu#pdu.request_id,
 			   ACMData, Variable, Extra}
+    catch
+        Class:Error:Stack ->
+	    ?vinfo("handle_pdu -> crash:"
+                   "~n      Class: ~p"
+                   "~n      Error: ~p"
+                   "~n      Stack: ~p", [Class, Error, Stack]),
+	    handle_acm_error(Vsn, Error, Pdu, ACMData, Address, Extra)
     end.
 
 do_handle_pdu(MibView, Vsn, Pdu, PduMS, 

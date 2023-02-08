@@ -221,7 +221,8 @@ zip:create("mnesia-4.4.7.ez",
      script</c> can be <c>strict</c> or <c>relaxed</c>. It is
      particularly useful to set the flag to <c>relaxed</c> when
      elaborating with code loading from archives without editing the
-     <c>boot script</c>. The default is <c>relaxed</c>. See <seeerl
+     <c>boot script</c>. The default has changed to <c>strict</c>
+     in OTP 26 and the option is scheduled for removal in OTP 27. See <seeerl
      marker="erts:init"><c>erts:init(3)</c></seeerl>.</p></section>
 
   <section>
@@ -847,9 +848,9 @@ rpc:call(Node, code, load_binary, [Module, Filename, Binary]),
         <p>Returns the path to a subdirectory directly under the top
          directory of an application. Normally the subdirectories
          reside under the top directory for the application, but when
-         applications at least partly resides in an archive, the
+         applications at least partly reside in an archive, the
          situation is different. Some of the subdirectories can reside
-         as regular directories while other reside in an archive
+         as regular directories while others reside in an archive
          file. It is not checked whether this directory exists.</p>
 	 <p><em>Example:</em></p>
         <pre>

@@ -1186,7 +1186,7 @@ assert_correct_cstruct(Cs) when is_record(Cs, cstruct) ->
     verify(true, mnesia_snmp_hook:check_ustruct(Snmp),
 	   {badarg, Tab, {snmp, Snmp}}),
 
-    CheckProp = fun(Prop) when is_tuple(Prop), size(Prop) >= 1 -> ok;
+    CheckProp = fun(Prop) when tuple_size(Prop) >= 1 -> ok;
 		   (Prop) ->
 			mnesia:abort({bad_type, Tab,
 				      {user_properties, [Prop]}})
@@ -2126,7 +2126,7 @@ make_change_table_majority(Tab, Majority) ->
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-write_table_property(Tab, Prop) when is_tuple(Prop), size(Prop) >= 1 ->
+write_table_property(Tab, Prop) when tuple_size(Prop) >= 1 ->
     schema_transaction(fun() -> do_write_table_property(Tab, Prop) end);
 write_table_property(Tab, Prop) ->
     {aborted, {bad_type, Tab, Prop}}.
@@ -2809,7 +2809,7 @@ transform_objs(Fun, Tab, RecName, Key, A, Storage, Type, Acc) ->
 transform_obj(Tab, RecName, Key, Fun, [Obj|Rest], NewArity, Type, Ws, Ds) ->
     NewObj = Fun(Obj),
     if
-        size(NewObj) /= NewArity ->
+        tuple_size(NewObj) /= NewArity ->
             exit({"Bad arity", Obj, NewObj});
 	NewObj == Obj ->
 	    transform_obj(Tab, RecName, Key, Fun, Rest, NewArity, Type, Ws, Ds);
@@ -3398,8 +3398,7 @@ do_merge_schema(LockTabs0) ->
 		    RemoteRunning = mnesia_lib:intersect(New ++ Old, RemoteRunning1),
 		    if
 			RemoteRunning /= RemoteRunning1 ->
-			    mnesia_lib:error("Mnesia on ~p could not connect to node(s) ~p~n",
-					     [node(), RemoteRunning1 -- RemoteRunning]),
+                            warn_user_connect_failed(RemoteRunning1 -- RemoteRunning),
 			    mnesia:abort({node_not_running, RemoteRunning1 -- RemoteRunning});
 			true -> ok
 		    end,
@@ -3439,6 +3438,22 @@ do_merge_schema(LockTabs0) ->
 	    %% No more nodes to merge schema with
 	    not_merged
     end.
+
+warn_user_connect_failed(Missing) ->
+    Tag = {user_warned, do_schema_merge},
+    case ?catch_val(Tag) of
+        {'EXIT', _} ->
+            mnesia_lib:error("Mnesia on ~p could not connect to node(s) ~p~n",
+                             [node(), Missing]),
+            mnesia_lib:set(Tag, 1);
+        N when N rem 2000 =:= 0 ->  %% ~10 min
+            mnesia_lib:error("Mnesia on ~p could not connect to node(s) ~p~n",
+                             [node(), Missing]),
+            mnesia_lib:set(Tag, N+1);
+        N ->
+            mnesia_lib:set(Tag, N+1)
+    end.
+
 
 fetch_cstructs(Node) ->
     rpc:call(Node, mnesia_controller, get_remote_cstructs, []).

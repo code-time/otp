@@ -66,12 +66,16 @@
          missing_root_cert_auth_user_verify_fun_accept/1,
          missing_root_cert_auth_user_verify_fun_reject/0,
          missing_root_cert_auth_user_verify_fun_reject/1,
+         missing_root_cert_auth_user_old_verify_fun_accept/0,
+         missing_root_cert_auth_user_old_verify_fun_accept/1,
          verify_fun_always_run_client/0,
          verify_fun_always_run_client/1,
          verify_fun_always_run_server/0,
          verify_fun_always_run_server/1,
          incomplete_chain_auth/0,
          incomplete_chain_auth/1,
+         no_chain_client_auth/0,
+         no_chain_client_auth/1,
          invalid_signature_client/0,
          invalid_signature_client/1,
          invalid_signature_server/0,
@@ -121,7 +125,9 @@
          signature_algorithms_bad_curve_secp384r1/0,
          signature_algorithms_bad_curve_secp384r1/1,
          signature_algorithms_bad_curve_secp521r1/0,
-         signature_algorithms_bad_curve_secp521r1/1
+         signature_algorithms_bad_curve_secp521r1/1,
+         server_certificate_authorities_disabled/0,
+         server_certificate_authorities_disabled/1
          ]).
 
 %%--------------------------------------------------------------------
@@ -189,7 +195,8 @@ tls_1_3_tests() ->
      client_auth_no_suitable_chain,
      hello_retry_client_auth,
      hello_retry_client_auth_empty_cert_accepted,
-     hello_retry_client_auth_empty_cert_rejected
+     hello_retry_client_auth_empty_cert_rejected,
+     server_certificate_authorities_disabled
     ].
 
 pre_tls_1_3_rsa_tests() ->
@@ -230,9 +237,11 @@ all_version_tests() ->
      missing_root_cert_auth,
      missing_root_cert_auth_user_verify_fun_accept,
      missing_root_cert_auth_user_verify_fun_reject,
+     missing_root_cert_auth_user_old_verify_fun_accept,
      verify_fun_always_run_client,
      verify_fun_always_run_server,
      incomplete_chain_auth,
+     no_chain_client_auth,
      invalid_signature_client,
      invalid_signature_server,
      critical_extension_auth,
@@ -500,7 +509,8 @@ missing_root_cert_auth(Config) when is_list(Config) ->
 					      {options, no_reuse(n_version(Version)) ++ [{verify, verify_peer}
                                                                              | ServerOpts]}]),
 
-    ssl_test_lib:check_result(Server, {error, {options, {cacertfile, ""}}}),
+    Error = {error, {options, incompatible, [{verify,verify_peer}, {cacerts,undefined}]}},
+    ssl_test_lib:check_result(Server, Error),
     
     ClientOpts =  proplists:delete(cacertfile, ssl_test_lib:ssl_options(extra_client, client_cert_opts, Config)),
     Client = ssl_test_lib:start_client_error([{node, ClientNode}, {port, 0},
@@ -508,7 +518,7 @@ missing_root_cert_auth(Config) when is_list(Config) ->
 					      {options, [{verify, verify_peer}
 							 | ClientOpts]}]),
 
-    ssl_test_lib:check_result(Client, {error, {options, {cacertfile, ""}}}).
+    ssl_test_lib:check_result(Client, Error).
     
 %%--------------------------------------------------------------------
 missing_root_cert_auth_user_verify_fun_accept() ->
@@ -517,6 +527,7 @@ missing_root_cert_auth_user_verify_fun_accept() ->
 
 missing_root_cert_auth_user_verify_fun_accept(Config) ->
     ServerOpts = ssl_test_lib:ssl_options(extra_server, server_cert_opts, Config),
+    ClientCaCerts = public_key:cacerts_get(),
     FunAndState =  {fun(_,{bad_cert, unknown_ca}, UserState) ->
 			    {valid, UserState};
 		       (_,{bad_cert, _} = Reason, _) ->
@@ -528,16 +539,19 @@ missing_root_cert_auth_user_verify_fun_accept(Config) ->
 		       (_, valid_peer, UserState) ->
 			    {valid, UserState}
 		    end, []},
-    ClientOpts = ssl_test_lib:ssl_options(extra_client,  [{verify, verify_peer},
-                                                         {verify_fun, FunAndState}], Config),
+    ClientOpts = ssl_test_lib:ssl_options(extra_client,
+                                          [{verify, verify_peer}, {verify_fun, FunAndState},
+                                           {cacerts, ClientCaCerts}],
+                                          Config),
     ssl_test_lib:basic_test(ClientOpts, ServerOpts, Config).
 
 %%--------------------------------------------------------------------
-missing_root_cert_auth_user_backwardscompatibility_verify_fun_accept() ->
+missing_root_cert_auth_user_old_verify_fun_accept() ->
     [{doc, "Test old style verify fun"}].
 
-missing_root_cert_auth_user_backwardscompatibility_verify_fun_accept(Config) ->
+missing_root_cert_auth_user_old_verify_fun_accept(Config) ->
     ServerOpts = ssl_test_lib:ssl_options(extra_server, server_cert_opts, Config),
+    ClientCaCerts = public_key:cacerts_get(),
     AcceptBadCa = fun({bad_cert,unknown_ca}, Acc) ->  Acc;
                      (Other, Acc) -> [Other | Acc]
 		  end,
@@ -548,8 +562,10 @@ missing_root_cert_auth_user_backwardscompatibility_verify_fun_accept(Config) ->
 		    [_|_] -> false
 		end
 	end,
-    ClientOpts = ssl_test_lib:ssl_options(extra_client, [{verify, verify_peer},
-                                                         {verify_fun, VerifyFun}], Config),
+    ClientOpts = ssl_test_lib:ssl_options(extra_client,
+                                          [{verify, verify_peer},
+                                           {verify_fun, VerifyFun},
+                                           {cacerts, ClientCaCerts}], Config),
     ssl_test_lib:basic_test(ClientOpts, ServerOpts, Config).
 
 %%--------------------------------------------------------------------
@@ -559,6 +575,7 @@ missing_root_cert_auth_user_verify_fun_reject() ->
 
 missing_root_cert_auth_user_verify_fun_reject(Config) ->
     ServerOpts = ssl_test_lib:ssl_options(extra_server, server_cert_opts, Config),
+    ClientCaCerts = public_key:cacerts_get(),
     FunAndState =  {fun(_,{bad_cert, unknown_ca} = Reason, _UserState) ->
 			    {fail, Reason};
 		       (_,{bad_cert, _} = Reason, _) ->
@@ -570,9 +587,14 @@ missing_root_cert_auth_user_verify_fun_reject(Config) ->
 		       (_, valid_peer, UserState) ->
 			    {valid, UserState}
 		    end, []},
-    ClientOpts =  ssl_test_lib:ssl_options(extra_client, [{verify, verify_peer},
-                                                          {verify_fun, FunAndState}], Config),
+    ClientOpts = ssl_test_lib:ssl_options(extra_client,
+                                          [{verify, verify_peer},
+                                           {verify_fun, FunAndState},
+                                           {cacerts, ClientCaCerts}],
+                                          Config),
     ssl_test_lib:basic_alert(ClientOpts, ServerOpts, Config, unknown_ca).
+
+
 %%--------------------------------------------------------------------
 incomplete_chain_auth() ->
     [{doc,"Test that we can verify an incompleat chain when we have the certs to rebuild it"}].
@@ -591,6 +613,31 @@ incomplete_chain_auth(Config) when is_list(Config) ->
                                                          proplists:delete(cacerts, ClientOpts0)], Config),
     ServerOpts = ssl_test_lib:ssl_options(extra_server, [{verify, verify_peer},
                                                          {cacerts, [ServerRoot]} |
+                                                         proplists:delete(cacerts, ServerOpts0)], Config),
+    ssl_test_lib:basic_test(ClientOpts, ServerOpts, Config).
+
+%%--------------------------------------------------------------------
+no_chain_client_auth() ->
+    [{doc,"In TLS-1.3 test that we allow sending only peer cert if chain CAs are missing and hence"
+      " we can not determine if client is in servers auth domain or not, so send and hope"
+      " that the cert chain is in the auth domain and that the server possess "
+      " intermediates to recreate the chain."}].
+no_chain_client_auth(Config) when is_list(Config) ->
+    Prop = proplists:get_value(tc_group_properties, Config),
+    Group = proplists:get_value(name, Prop),
+    DefaultCertConf = ssl_test_lib:default_ecc_cert_chain_conf(Group),
+    #{client_config := ClientOpts0,
+      server_config := ServerOpts0} = ssl_test_lib:make_cert_chains_der(proplists:get_value(cert_key_alg, Config),
+                                                                        [{server_chain, DefaultCertConf},
+                                                                         {client_chain, DefaultCertConf}]),
+    ServerCas = proplists:get_value(cacerts, ServerOpts0),
+    [ClientRoot| _] = ClientCas = proplists:get_value(cacerts, ClientOpts0),
+    ClientOpts = ssl_test_lib:ssl_options(extra_client, [{verify, verify_peer},
+                                                         {cacerts, [ClientRoot]} |
+                                                         proplists:delete(cacerts, ClientOpts0)], Config),
+    ServerOpts = ssl_test_lib:ssl_options(extra_server, [{verify, verify_peer},
+                                                         {fail_if_no_peer_cert, true},
+                                                         {cacerts,  ClientCas ++ ServerCas} |
                                                          proplists:delete(cacerts, ServerOpts0)], Config),
     ssl_test_lib:basic_test(ClientOpts, ServerOpts, Config).
 
@@ -614,13 +661,17 @@ verify_fun_always_run_client(Config) when is_list(Config) ->
     %% If user verify fun is called correctly we fail the connection.
     %% otherwise we cannot tell this case apart form where we miss
     %% to call users verify fun
-    FunAndState =  {fun(_,{extension, _}, UserState) ->
+    FunAndState =  {fun(_, Der, {extension, _}, UserState) ->
+                            true = is_binary(Der),
 			    {unknown, UserState};
-		       (_, valid, [ChainLen]) ->
+		       (_, Der, valid, [ChainLen]) ->
+                            true = is_binary(Der),
 			    {valid, [ChainLen + 1]};
-		       (_, valid_peer, [1]) ->
+		       (_, Der, valid_peer, [1]) ->
+                            true = is_binary(Der),
 			    {fail, "verify_fun_was_always_run"};
-		       (_, valid_peer, UserState) ->
+		       (_, Der, valid_peer, UserState) ->
+                            true = is_binary(Der),
 			    {valid, UserState}
 		    end, [0]},
 
@@ -648,13 +699,17 @@ verify_fun_always_run_server(Config) when is_list(Config) ->
     %% If user verify fun is called correctly we fail the connection.
     %% otherwise we cannot tell this case apart form where we miss
     %% to call users verify fun
-    FunAndState =  {fun(_,{extension, _}, UserState) ->
+    FunAndState =  {fun(_, Der, {extension, _}, UserState) ->
+                            true = is_binary(Der),
 			    {unknown, UserState};
-		       (_, valid, [ChainLen]) ->
+		       (_, Der, valid, [ChainLen]) ->
+                            true = is_binary(Der),
 			    {valid, [ChainLen + 1]};
-		       (_, valid_peer, [1]) ->
+		       (_, Der, valid_peer, [1]) ->
+                            true = is_binary(Der),
 			    {fail, "verify_fun_was_always_run"};
-		       (_, valid_peer, UserState) ->
+		       (_, Der, valid_peer, UserState) ->
+                            true = is_binary(Der),
 			    {valid, UserState}
 		    end, [0]},
 
@@ -1202,7 +1257,7 @@ signature_algorithms_bad_curve_secp256r1(Config) ->
     ClientOpts0 = ssl_test_lib:ssl_options(client_cert_opts, Config),
     ServerOpts0 = ssl_test_lib:ssl_options(server_cert_opts, Config),
     %% Set versions
-    ServerOpts = [{versions, ['tlsv1.2','tlsv1.3']}, {log_level, debug}|ServerOpts0],
+    ServerOpts = [{versions, ['tlsv1.2','tlsv1.3']} | ServerOpts0],
     ClientOpts = [{versions, ['tlsv1.2','tlsv1.3']},
                   {signature_algs, [ecdsa_secp384r1_sha384,
                                     ecdsa_secp521r1_sha512,
@@ -1219,7 +1274,7 @@ signature_algorithms_bad_curve_secp384r1(Config) ->
     ClientOpts0 = ssl_test_lib:ssl_options(client_cert_opts, Config),
     ServerOpts0 = ssl_test_lib:ssl_options(server_cert_opts, Config),
     %% Set versions
-    ServerOpts = [{versions, ['tlsv1.2','tlsv1.3']}, {log_level, debug}|ServerOpts0],
+    ServerOpts = [{versions, ['tlsv1.2','tlsv1.3']} | ServerOpts0],
     ClientOpts = [{versions, ['tlsv1.2','tlsv1.3']},
                   {signature_algs, [ecdsa_secp256r1_sha256,
                                     ecdsa_secp521r1_sha512,
@@ -1236,7 +1291,7 @@ signature_algorithms_bad_curve_secp521r1(Config) ->
     ClientOpts0 = ssl_test_lib:ssl_options(client_cert_opts, Config),
     ServerOpts0 = ssl_test_lib:ssl_options(server_cert_opts, Config),
     %% Set versions
-    ServerOpts = [{versions, ['tlsv1.2','tlsv1.3']}, {log_level, debug}|ServerOpts0],
+    ServerOpts = [{versions, ['tlsv1.2','tlsv1.3']} | ServerOpts0],
     ClientOpts = [{versions, ['tlsv1.2','tlsv1.3']},
                   {signature_algs, [ecdsa_secp256r1_sha256,
                                     ecdsa_secp384r1_sha384,
@@ -1256,6 +1311,42 @@ basic_rsa_1024(Config) ->
     ServerOpts = [{verify, verify_peer},
                   {fail_if_no_peer_cert, true} | ServerOpts1],
     ssl_test_lib:basic_test(ClientOpts, ServerOpts, Config).
+
+%%--------------------------------------------------------------------
+server_certificate_authorities_disabled() ->
+     [{doc,"TLS 1.3: Disabling certificate_authorities extension on the server when verify_peer is set to true"
+       " allows the client to send a chain that could be verifiable by the server but that would not adhere to"
+       " the certificate_authorities extension as it is not part of the regular trusted certificate set"}].
+
+server_certificate_authorities_disabled(Config) ->
+    ClientOpts0 = ssl_test_lib:ssl_options(client_cert_opts, Config),
+    ServerOpts0 = ssl_test_lib:ssl_options(server_cert_opts, Config),
+
+    % Strip out the ClientRoot to simulate cases where the they are manually managed and
+    % not expected to be included in certificate requests during mutual authentication.
+    {ok, CACerts0} = ssl_pkix_db:decode_pem_file(proplists:get_value(cacertfile, ServerOpts0)),
+    [_ClientRoot | ServerCACerts] = [CertDER || {_, CertDER, _} <- CACerts0],
+
+    FunAndState =  {fun(_,{extension, _}, UserState) ->
+                            {unknown, UserState};
+                       (_, valid, UserState) ->
+                            {valid, UserState};
+                       % Because this is a manually managed setup, we also need to manually verify
+                       % an unknown_ca (ClientCert) as expected. Typically you would have custom logic
+                       % here to decide if you know the cert (like looking up pinned values in a DB)
+                       % but for testing purposes, we'll allow everything
+                       (_, {bad_cert, unknown_ca}, UserState) ->
+                            {valid, UserState};
+                       (_, valid_peer, UserState) ->
+                            {valid, UserState}
+                    end, [0]},
+
+    ClientOpts = [{versions, ['tlsv1.3']}, {verify, verify_peer} | ClientOpts0],
+    ServerOpts = [{versions, ['tlsv1.3']}, {verify, verify_peer},
+                  {fail_if_no_peer_cert, true}, {cacerts, ServerCACerts},
+                  {verify_fun, FunAndState} | ServerOpts0],
+    ssl_test_lib:basic_alert(ClientOpts, ServerOpts, Config, certificate_required),
+    ssl_test_lib:basic_test(ClientOpts, [{certificate_authorities, false} | ServerOpts], Config).
 
 %%--------------------------------------------------------------------
 %% Internal functions  -----------------------------------------------

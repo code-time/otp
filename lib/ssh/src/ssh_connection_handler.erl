@@ -421,7 +421,7 @@ init([Role, Socket, Opts]) when Role==client ; Role==server ->
             end;
 
         {error,Error} ->
-            {stop, {error,Error}}
+            {stop, {shutdown,Error}}
     end.
 
 %%%----------------------------------------------------------------
@@ -1091,8 +1091,10 @@ handle_event(info, {Proto, Sock, Info}, {hello,_}, #data{socket = Sock,
     end;
 
 
-handle_event(info, {Proto, Sock, NewData}, StateName, D0 = #data{socket = Sock,
-								 transport_protocol = Proto}) ->
+handle_event(info, {Proto, Sock, NewData}, StateName,
+             D0 = #data{socket = Sock,
+                        transport_protocol = Proto,
+                        ssh_params = SshParams}) ->
     try ssh_transport:handle_packet_part(
 	  D0#data.decrypted_data_buffer,
 	  <<(D0#data.encrypted_data_buffer)/binary, NewData/binary>>,
@@ -1118,7 +1120,10 @@ handle_event(info, {Proto, Sock, NewData}, StateName, D0 = #data{socket = Sock,
                 #ssh_msg_global_request{}            = Msg -> {keep_state, D1, ?CONNECTION_MSG(Msg)};
                 #ssh_msg_request_success{}           = Msg -> {keep_state, D1, ?CONNECTION_MSG(Msg)};
                 #ssh_msg_request_failure{}           = Msg -> {keep_state, D1, ?CONNECTION_MSG(Msg)};
-                #ssh_msg_channel_open{}              = Msg -> {keep_state, D1, ?CONNECTION_MSG(Msg)};
+                #ssh_msg_channel_open{}              = Msg -> {keep_state, D1,
+                                                               [{{timeout, max_initial_idle_time}, cancel} |
+                                                                ?CONNECTION_MSG(Msg)
+                                                               ]};
                 #ssh_msg_channel_open_confirmation{} = Msg -> {keep_state, D1, ?CONNECTION_MSG(Msg)};
                 #ssh_msg_channel_open_failure{}      = Msg -> {keep_state, D1, ?CONNECTION_MSG(Msg)};
                 #ssh_msg_channel_window_adjust{}     = Msg -> {keep_state, D1, ?CONNECTION_MSG(Msg)};
@@ -1136,10 +1141,11 @@ handle_event(info, {Proto, Sock, NewData}, StateName, D0 = #data{socket = Sock,
 				    ]}
 	    catch
 		C:E:ST  ->
-                    {Shutdown, D} =  
+                    MaxLogItemLen = ?GET_OPT(max_log_item_len,SshParams#ssh.opts),
+                    {Shutdown, D} =
                         ?send_disconnect(?SSH_DISCONNECT_PROTOCOL_ERROR,
-                                         io_lib:format("Bad packet: Decrypted, but can't decode~n~p:~p~n~p",
-                                                       [C,E,ST]),
+                                         io_lib:format("Bad packet: Decrypted, but can't decode~n~p:~p~n~P",
+                                                       [C,E,ST,MaxLogItemLen]),
                                          StateName, D1),
                     {stop, Shutdown, D}
 	    end;
@@ -1170,9 +1176,11 @@ handle_event(info, {Proto, Sock, NewData}, StateName, D0 = #data{socket = Sock,
             {stop, Shutdown, D}
     catch
 	C:E:ST ->
-            {Shutdown, D} =  
+            MaxLogItemLen = ?GET_OPT(max_log_item_len,SshParams#ssh.opts),
+            {Shutdown, D} =
                 ?send_disconnect(?SSH_DISCONNECT_PROTOCOL_ERROR,
-                                 io_lib:format("Bad packet: Couldn't decrypt~n~p:~p~n~p",[C,E,ST]),
+                                 io_lib:format("Bad packet: Couldn't decrypt~n~p:~p~n~P",
+                                               [C,E,ST,MaxLogItemLen]),
                                  StateName, D0),
             {stop, Shutdown, D}
     end;
@@ -1181,7 +1189,7 @@ handle_event(info, {Proto, Sock, NewData}, StateName, D0 = #data{socket = Sock,
 %%%==== 
 handle_event(internal, prepare_next_packet, _StateName, D) ->
     Enough =  erlang:max(8, D#data.ssh_params#ssh.decrypt_block_size),
-    case size(D#data.encrypted_data_buffer) of
+    case byte_size(D#data.encrypted_data_buffer) of
 	Sz when Sz >= Enough ->
 	    self() ! {D#data.transport_protocol, D#data.socket, <<>>};
 	_ ->
@@ -1231,6 +1239,9 @@ handle_event({timeout,idle_time}, _Data,  _StateName, D) ->
         _ ->
             keep_state_and_data
     end;
+
+handle_event({timeout,max_initial_idle_time}, _Data,  _StateName, _D) ->
+    {stop, {shutdown, "Timeout"}};
 
 %%% So that terminate will be run when supervisor is shutdown
 handle_event(info, {'EXIT', _Sup, Reason}, StateName, _D) ->
@@ -1897,7 +1908,7 @@ do_log(F, Reason0, #data{ssh_params=S}) ->
 
 assure_string(S) ->
     try io_lib:format("~s",[S])
-    of _ -> S
+    of Formatted -> Formatted
     catch
         _:_ -> io_lib:format("~p",[S])
     end.
@@ -2077,7 +2088,7 @@ ssh_dbg_off(disconnect) -> dbg:ctpl(?MODULE, send_disconnect, 7);
 ssh_dbg_off(terminate) -> dbg:ctpg(?MODULE, terminate, 3);
 ssh_dbg_off(tcp) -> dbg:ctpg(?MODULE, handle_event, 4), % How to avoid cancelling 'connection_events' ?
                     dbg:ctpl(?MODULE, send_bytes, 2),
-                    dbg:ctpg(?MODULE, close_transport, 1);
+                    dbg:ctpl(?MODULE, close_transport, 1);
 ssh_dbg_off(renegotiation) -> dbg:ctpl(?MODULE,   init_renegotiate_timers, 3),
                               dbg:ctpl(?MODULE,   pause_renegotiate_timers, 3),
                               dbg:ctpl(?MODULE,   check_data_rekeying_dbg, 2),

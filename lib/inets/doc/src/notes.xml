@@ -33,7 +33,82 @@
     <file>notes.xml</file>
   </header>
   
-  <section><title>Inets 8.0</title>
+  <section><title>Inets 8.2.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    fixes a missing case of the type specification for
+	    httpd:info/2/3/4</p>
+          <p>
+	    Own Id: OTP-18362 Aux Id: GH-6558, ERIERL-895 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Inets 8.2</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    This change allows body requests to
+	    <c>httpc:request/5</c> be an <c>iolist()</c></p>
+          <p>
+	    Own Id: OTP-18250</p>
+        </item>
+        <item>
+          <p>
+	    addition of type specs in <c>httpc.erl</c></p>
+          <p>
+	    Own Id: OTP-18251 Aux Id: GH-6245 </p>
+        </item>
+        <item>
+          <p>
+	    httpc: Add support for HTTP 308 status code</p>
+          <p>
+	    Own Id: OTP-18280 Aux Id: GH-6290, PR-6291 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Inets 8.1</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Add <c>httpc:ssl_verify_host_options/1</c> to help
+	    setting default ssl options for the https client.</p>
+          <p>
+	    Own Id: OTP-18118</p>
+        </item>
+        <item>
+          <p>
+	    This change fixes dialyzer warnings generated for
+	    inets/httpd examples (includes needed adjustment of spec
+	    for ssh_sftp module).</p>
+          <p>
+	    Own Id: OTP-18178 Aux Id: ERIERL-833, ERIERL-834,
+	    ERIERL-835 </p>
+        </item>
+        <item>
+          <p>
+	    Remove documentation of no longer supported callback.</p>
+          <p>
+	    Own Id: OTP-18193 Aux Id: GH-6122 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Inets 8.0</title>
 
     <section><title>Fixed Bugs and Malfunctions</title>
       <list>
@@ -108,6 +183,21 @@
 	    from httpd manual.</p>
           <p>
 	    Own Id: OTP-18088 Aux Id: GH-5276 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+  <section><title>Inets 7.5.3.1</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Remove documentation of no longer supported callback.</p>
+          <p>
+	    Own Id: OTP-18193 Aux Id: GH-6122 </p>
         </item>
       </list>
     </section>
@@ -308,6 +398,21 @@
 	    variables.</p>
           <p>
 	    Own Id: OTP-17385 Aux Id: OTP-17123 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+  <section><title>Inets 7.3.2.3</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Remove documentation of no longer supported callback.</p>
+          <p>
+	    Own Id: OTP-18193 Aux Id: GH-6122 </p>
         </item>
       </list>
     </section>

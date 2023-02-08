@@ -32,6 +32,175 @@
   <p>This document describes the changes made to the Compiler
     application.</p>
 
+<section><title>Compiler 8.2.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>Fixed a bug that could cause legal code to fail
+	    validation.</p>
+          <p>
+	    Own Id: OTP-18365</p>
+        </item>
+        <item>
+	    <p>Eliminated a rare crash in the <c>beam_types</c>
+	    module.</p>
+          <p>
+	    Own Id: OTP-18368</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 8.2.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>Line number in compiler messages would be truncated to
+	    4 digits for line numbers greater than 9999.</p>
+          <p>
+	    Own Id: OTP-18268 Aux Id: GH-6332 </p>
+        </item>
+        <item>
+	    <p>In rare circumstance, matching a binary as part of a
+	    <c>receive</c> clause could cause the compiler to
+	    terminate because of an internal consistency check
+	    failure.</p>
+          <p>
+	    Own Id: OTP-18273 Aux Id: GH-6341 </p>
+        </item>
+        <item>
+	    <p>Compiling a function with complex bit syntax matching
+	    such as <c>f(&lt;&lt;X:0, _:X&gt;&gt;, &lt;&lt;Y:0,
+	    _:Y&gt;&gt;) -&gt; ok.</c> could crash the compiler.</p>
+          <p>
+	    Own Id: OTP-18308 Aux Id: GH-6426 </p>
+        </item>
+        <item>
+	    <p>It is not allowed to call functions from guards. The
+	    compiler failed to reject a call in a guard when done by
+	    constructing a record with a default initialization
+	    expression that called a function.</p>
+          <p>
+	    Own Id: OTP-18325 Aux Id: GH-6465, GH-6466 </p>
+        </item>
+        <item>
+	    <p>The compiler could crash when using a record with
+	    complex field initialization expression as a filter in a
+	    list comprehension.</p>
+          <p>
+	    Own Id: OTP-18336 Aux Id: GH-6501, PR-6502 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 8.2.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>The compiler will now forbid using the empty atom
+	    <c>''</c> as module name. Also forbidden are modules
+	    names containing control characters, and module names
+	    containing only spaces and soft hyphens.</p>
+          <p>
+	    Own Id: OTP-18125 Aux Id: GH-6026 </p>
+        </item>
+        <item>
+	    <p>The <c>bin_opt_info</c> and <c>recv_opt_info</c>
+	    options would cause the compiler to crash when attempting
+	    to compile generated code without location
+	    information.</p>
+          <p>
+	    Own Id: OTP-18162 Aux Id: PR-6102 </p>
+        </item>
+        <item>
+	    <p>In rare circumstances involving floating point
+	    operations, the compiler could terminate with an internal
+	    consistency check failure.</p>
+          <p>
+	    Own Id: OTP-18182 Aux Id: GH-6163 </p>
+        </item>
+        <item>
+	    <p>In rare circumstances when doing arithmetic
+	    instructions on non-numbers, the compiler could
+	    crash.</p>
+          <p>
+	    Own Id: OTP-18183 Aux Id: GH-6169 </p>
+        </item>
+        <item>
+	    <p>In rare circumstances, complex boolean expressions in
+	    nested cases could cause the compiler to crash.</p>
+          <p>
+	    Own Id: OTP-18184 Aux Id: GH-6164 </p>
+        </item>
+        <item>
+	    <p>Expression similar to <c>#{assoc:=V} =
+	    #key=&gt;self()}, V</c> would return the empty map
+	    instead of raising an exception.</p>
+          <p>
+	    Own Id: OTP-18186</p>
+        </item>
+        <item>
+	    <p>Eliminated a crash in the <c>beam_ssa_bool</c> pass of
+	    the compiler when compiling a complex guard
+	    expression.</p>
+          <p>
+	    Own Id: OTP-18187 Aux Id: GH-6184 </p>
+        </item>
+        <item>
+	    <p>In rare circumstances, the compiler could crash with
+	    an internal consistency check failure.</p>
+          <p>
+	    Own Id: OTP-18202 Aux Id: GH-6222 </p>
+        </item>
+        <item>
+	    <p>When compiling with the option
+	    <c>inline_list_funcs</c>, the compiler could produce a
+	    nonsensical warning.</p>
+          <p>
+	    Own Id: OTP-18214 Aux Id: GH-6158 </p>
+        </item>
+        <item>
+	    <p>When given the <c>no_ssa_opt</c> option, the compiler
+	    could terminate with an internal consistency failure
+	    diagnostic when compiling map matching.</p>
+          <p>
+	    Own Id: OTP-18234 Aux Id: GH-6277 </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Made warnings for existing atoms being keywords in
+	    experimental features more precise, by not warning about
+	    quoted atoms.</p>
+          <p>
+	    Own Id: OTP-18050</p>
+        </item>
+        <item>
+	    <p>There is a new configure option,
+	    <c>--enable-deterministic-build</c>, which will apply the
+	    <c>deterministic</c> compiler option when building
+	    Erlang/OTP. The <c>deterministic</c> option has been
+	    improved to eliminate more sources of non-determinism in
+	    several applications.</p>
+          <p>
+	    Own Id: OTP-18165 Aux Id: PR-5965 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
 <section><title>Compiler 8.2</title>
 
     <section><title>Fixed Bugs and Malfunctions</title>
@@ -186,6 +355,53 @@
 	    the reference manual.</p>
           <p>
 	    Own Id: OTP-17988</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 8.1.1.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>It is not allowed to call functions from guards. The
+	    compiler failed to reject a call in a guard when done by
+	    constructing a record with a default initialization
+	    expression that called a function.</p>
+          <p>
+	    Own Id: OTP-18325 Aux Id: GH-6465, GH-6466 </p>
+        </item>
+        <item>
+	    <p>Fixed a bug that could cause legal code to fail
+	    validation.</p>
+          <p>
+	    Own Id: OTP-18365</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 8.1.1.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>The <c>bin_opt_info</c> and <c>recv_opt_info</c>
+	    options would cause the compiler to crash when attempting
+	    to compile generated code without location
+	    information.</p>
+          <p>
+	    Own Id: OTP-18162 Aux Id: PR-6102 </p>
+        </item>
+        <item>
+	    <p>In rare circumstances involving floating point
+	    operations, the compiler could terminate with an internal
+	    consistency check failure.</p>
+          <p>
+	    Own Id: OTP-18182 Aux Id: GH-6163 </p>
         </item>
       </list>
     </section>

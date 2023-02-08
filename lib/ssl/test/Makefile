@@ -79,6 +79,7 @@ MODULES = \
 	ssl_session_cache_SUITE	\
 	ssl_session_cache_api_SUITE\	\
 	ssl_session_ticket_SUITE \
+	ssl_trace_SUITE \
 	openssl_session_ticket_SUITE \
 	openssl_session_SUITE \
 	ssl_ECC_SUITE \
@@ -144,6 +145,7 @@ RELSYSDIR = $(RELEASE_PATH)/ssl_test
 # running the target "targets".
 # ----------------------------------------------------
 ERL_COMPILE_FLAGS += $(INCLUDES)
+ERL_COMPILE_FLAGS := $(filter-out +deterministic,$(ERL_COMPILE_FLAGS))
 
 # ----------------------------------------------------
 # Targets

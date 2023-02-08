@@ -35,8 +35,6 @@
 	 load_abs/1,
 	 load_abs/2,
 	 load_binary/3,
-	 load_native_partial/2,
-	 load_native_sticky/3,
 	 atomic_load/1,
 	 prepare_loading/1,
 	 finish_loading/1,
@@ -71,6 +69,7 @@
 	 start_link/0,
 	 which/1,
          get_doc/1,
+         get_doc/2,
 	 where_is_file/1,
 	 where_is_file/2,
 	 set_primary_archive/4,
@@ -216,16 +215,6 @@ load_abs(File, M) when (is_list(File) orelse is_atom(File)), is_atom(M) ->
 load_binary(Mod, File, Bin)
   when is_atom(Mod), (is_list(File) orelse is_atom(File)), is_binary(Bin) ->
     call({load_binary,Mod,File,Bin}).
-
--spec load_native_partial(Module :: module(), Binary :: binary()) -> load_ret().
-load_native_partial(Mod, Bin) when is_atom(Mod), is_binary(Bin) ->
-    call({load_native_partial,Mod,Bin}).
-
--spec load_native_sticky(Module :: module(), Binary :: binary(), WholeModule :: 'false' | binary()) -> load_ret().
-load_native_sticky(Mod, Bin, WholeModule)
-  when is_atom(Mod), is_binary(Bin),
-       (is_binary(WholeModule) orelse WholeModule =:= false) ->
-    call({load_native_sticky,Mod,Bin,WholeModule}).
 
 -spec delete(Module) -> boolean() when
       Module :: module().
@@ -601,28 +590,7 @@ verify_prepared(_) ->
 
 finish_loading(Prepared0, EnsureLoaded) ->
     Prepared = [{M,{Bin,File}} || {M,{Bin,File,_}} <- Prepared0],
-    Native0 = [{M,Code} || {M,{_,_,Code}} <- Prepared0,
-			   Code =/= undefined],
-    case call({finish_loading,Prepared,EnsureLoaded}) of
-	ok ->
-	    finish_loading_native(Native0);
-	{error,Errors}=E when EnsureLoaded ->
-	    S0 = sofs:relation(Errors),
-	    S1 = sofs:domain(S0),
-	    R0 = sofs:relation(Native0),
-	    R1 = sofs:drestriction(R0, S1),
-	    Native = sofs:to_external(R1),
-	    finish_loading_native(Native),
-	    E;
-	{error,_}=E ->
-	    E
-    end.
-
-finish_loading_native([{Mod,Code}|Ms]) ->
-    _ = load_native_partial(Mod, Code),
-    finish_loading_native(Ms);
-finish_loading_native([]) ->
-    ok.
+    call({finish_loading,Prepared,EnsureLoaded}).
 
 load_mods([]) ->
     {[],[]};
@@ -749,6 +717,7 @@ load_code_server_prerequisites() ->
 	      os,
 	      unicode],
     _ = [M = M:module_info(module) || M <- Needed],
+    _ = erl_features:enabled(),
     ok.
 
 maybe_stick_dirs(interactive) ->
@@ -859,33 +828,51 @@ where_is_file(Tail, File, Path, Files) ->
       Res :: #docs_v1{},
       Reason :: non_existing | missing | file:posix().
 get_doc(Mod) when is_atom(Mod) ->
+    get_doc(Mod, #{sources => [eep48, debug_info]}).
+
+get_doc(Mod, #{sources:=[Source|Sources]}=Options) ->
+    GetDoc = fun(Fn) -> R = case Source of
+            debug_info -> get_doc_chunk_from_ast(Fn);
+            eep48 -> get_doc_chunk(Fn, Mod)
+        end,
+        case R of
+            {error, missing} -> get_doc(Mod, Options#{sources=>Sources});
+            _ -> R
+        end
+    end,
     case which(Mod) of
         preloaded ->
-            Fn = filename:join([code:lib_dir(erts),"ebin",atom_to_list(Mod) ++ ".beam"]),
-            get_doc_chunk(Fn, Mod);
+            ErtsDir = code:lib_dir(erts),
+            ErtsEbinDir =
+                case filelib:is_dir(filename:join([ErtsDir,"ebin"])) of
+                    true -> filename:join([ErtsDir,"ebin"]);
+                    false -> filename:join([ErtsDir,"preloaded","ebin"])
+                end,
+            Fn = filename:join([ErtsEbinDir, atom_to_list(Mod) ++ ".beam"]),
+            GetDoc(Fn);
         Error when is_atom(Error) ->
             {error, Error};
         Fn ->
-            get_doc_chunk(Fn, Mod)
-    end.
+            GetDoc(Fn)
+    end;
+get_doc(_, #{sources:=[]}) ->
+    {error, missing}.
 
 get_doc_chunk(Filename, Mod) when is_atom(Mod) ->
     case beam_lib:chunks(Filename, ["Docs"]) of
         {error,beam_lib,{missing_chunk,_,_}} ->
-            case get_doc_chunk(Filename, atom_to_list(Mod)) of
-                {error,missing} ->
-                    get_doc_chunk_from_ast(Filename);
-                Error ->
-                    Error
-            end;
+            get_doc_chunk(Filename, atom_to_list(Mod));
         {error,beam_lib,{file_error,_Filename,_Err}} ->
             get_doc_chunk(Filename, atom_to_list(Mod));
         {ok, {Mod, [{"Docs",Bin}]}} ->
             {ok,binary_to_term(Bin)}
     end;
 get_doc_chunk(Filename, Mod) ->
+    RootDir = code:root_dir(),
     case filename:dirname(Filename) of
         Filename ->
+            {error,missing};
+        RootDir ->
             {error,missing};
         Dir ->
             ChunkFile = filename:join([Dir,"doc","chunks",Mod ++ ".chunk"]),
@@ -903,24 +890,36 @@ get_doc_chunk_from_ast(Filename) ->
     case beam_lib:chunks(Filename, [abstract_code]) of
         {error,beam_lib,{missing_chunk,_,_}} ->
             {error,missing};
+        {error,beam_lib,{file_error,_,_}} ->
+            {error, missing};
         {ok, {_Mod, [{abstract_code,
                       {raw_abstract_v1, AST}}]}} ->
             Docs = get_function_docs_from_ast(AST),
+            Types = get_type_docs_from_ast(AST),
             {ok, #docs_v1{ anno = 0, beam_language = erlang,
                            module_doc = none,
-                           metadata = #{ generated => true, otp_doc_vsn => ?CURR_DOC_VERSION },
-                           docs = Docs }};
+                           metadata = #{ generated => true, otp_doc_vsn => ?CURR_DOC_VERSION},
+                           docs = Docs++Types }};
         {ok, {_Mod, [{abstract_code,no_abstract_code}]}} ->
             {error,missing};
         Error ->
             Error
     end.
 
+get_type_docs_from_ast(AST) ->
+    lists:flatmap(fun(E) -> get_type_docs_from_ast(E, AST) end, AST).
+get_type_docs_from_ast({attribute, Anno, type, {TypeName, _, Ps}}=Meta, _) ->
+    Arity = length(Ps),
+    Signature = io_lib:format("~p/~p",[TypeName,Arity]),
+    [{{type, TypeName, Arity},Anno,[unicode:characters_to_binary(Signature)],none,#{signature => [Meta]}}];
+get_type_docs_from_ast(_, _) ->
+    [].
+
 get_function_docs_from_ast(AST) ->
     lists:flatmap(fun(E) -> get_function_docs_from_ast(E, AST) end, AST).
 get_function_docs_from_ast({function,Anno,Name,Arity,_Code}, AST) ->
     Signature = io_lib:format("~p/~p",[Name,Arity]),
-    Specs =  lists:filter(
+    Specs = lists:filter(
                fun({attribute,_Ln,spec,{FA,_}}) ->
                        case FA of
                            {F,A} ->

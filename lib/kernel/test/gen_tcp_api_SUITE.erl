@@ -588,9 +588,23 @@ t_fdopen(Config) when is_list(Config) ->
 
 
 t_fdconnect(Config) when is_list(Config) ->
-    ?TC_TRY(t_fdconnect, fun() -> do_t_fdconnect(Config) end).
+    Cond = fun() ->
+                   ?P("Try verify if IPv4 is supported"),
+                   ?HAS_SUPPORT_IPV4()
+           end,
+    Pre  = fun() ->
+                   {ok, Addr} = ?WHICH_LOCAL_ADDR(inet),
+                   ?P("Use (local) address: ~p", [Addr]),
+                   #{local_addr => Addr}
+           end,
+    Case = fun(#{local_addr := Addr}) ->
+                   do_t_fdconnect(Addr, Config)
+           end,
+    Post = fun(_) -> ok end,
+    ?TC_TRY(?FUNCTION_NAME,
+            Cond, Pre, Case, Post).
 
-do_t_fdconnect(Config) ->
+do_t_fdconnect(Addr, Config) ->
     Question  = "Aaaa... Long time ago in a small town in Germany,",
     Question1 = list_to_binary(Question),
     Question2 = [<<"Aaaa">>, "... ", $L, <<>>, $o, "ng time ago ",
@@ -613,7 +627,7 @@ do_t_fdconnect(Config) ->
             ?SKIPT("failed loading util nif lib")
     end,
     ?P("try create listen socket"),
-    LOpts = ?INET_BACKEND_OPTS(Config) ++ [{active, false}],
+    LOpts = ?INET_BACKEND_OPTS(Config) ++ [{ifaddr, Addr}, {active, false}],
     L = try gen_tcp:listen(0, LOpts) of
             {ok, LSock} ->
                 LSock;
@@ -637,9 +651,13 @@ do_t_fdconnect(Config) ->
     ?P("try create file descriptor"),
     FD = gen_tcp_api_SUITE:getsockfd(),
     ?P("try connect (to port ~w) using file descriptor ~w", [LPort, FD]),
-    COpts = ?INET_BACKEND_OPTS(Config) ++ [{fd, FD}, {active, false}],
-    Client = try gen_tcp:connect(localhost, LPort, COpts) of
+    COpts = ?INET_BACKEND_OPTS(Config) ++ [{fd,     FD},
+                                           {ifaddr, Addr},
+                                           {active, false}],
+    %% The debug is just to "see" that it (debug) "works"...
+    Client = try gen_tcp:connect(Addr, LPort, COpts ++ [{debug, true}]) of
                  {ok, CSock} ->
+                     ok = inet:setopts(CSock, [{debug, false}]),
                      CSock;
                  {error, eaddrnotavail = CReason} ->
                      gen_tcp:close(L),
@@ -890,6 +908,7 @@ do_local_fdopen(Config) ->
     ?P("listen socket created: ~p"
        "~n   => try connect ~p", [L, ConnectOpts]),
     C0 = ok(gen_tcp:connect(SAddr, 0, ConnectOpts)),
+    ok = inet:setopts(C0, [{debug, true}]),
     ?P("connected: ~p"
        "~n   => get fd", [C0]),
     Fd = if

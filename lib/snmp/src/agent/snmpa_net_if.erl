@@ -1656,7 +1656,7 @@ udp_send(Socket, To, B) ->
             ok;
 	ok ->
             %% For future use! Ephemeral ports!
-	    {ok, size(B)}
+	    {ok, byte_size(B)}
     catch
 	error:ExitReason:StackTrace ->
 	    error_msg("[exit] cannot send message "
@@ -1665,7 +1665,7 @@ udp_send(Socket, To, B) ->
     end.
 
 sz(L) when is_list(L) -> length(L);
-sz(B) when is_binary(B) -> size(B);
+sz(B) when is_binary(B) -> byte_size(B);
 sz(_) -> undefined.
 
 
@@ -1888,9 +1888,18 @@ handle_set_request_limit(State, BadLimit) ->
 system_continue(_Parent, _Dbg, S) ->
     loop(S).
 
-system_terminate(Reason, _Parent, _Dbg, #state{log = Log}) ->
+system_terminate(Reason, _Parent, _Dbg, #state{log        = Log,
+                                               transports = Transports}) ->
     ?vlog("system-terminate -> entry with"
 	  "~n   Reason: ~p", [Reason]),
+    %% Close all transports
+    Close =
+        fun(S) ->
+                ?vlog("try close socket ~p", [S]),
+                (catch gen_udp:close(S))
+        end,
+    _ = [Close(Socket) || #transport{socket = Socket} <- Transports],
+    %% Close logs
     do_close_log(Log),
     exit(Reason).
 

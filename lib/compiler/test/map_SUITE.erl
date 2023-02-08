@@ -83,7 +83,13 @@
          t_bif_map_find/1,
          t_fold_3/1, t_from_keys/1, t_map_2/1, t_maps_take_2/1,
          t_update_with_3/1, t_update_with_4/1,
-         t_with_2/1
+         t_with_2/1,
+
+         %% miscellaneous
+         t_conflicting_destinations/1,
+         t_cse_assoc/1,
+         shared_key_tuples/1,
+         map_aliases/1
         ]).
 
 -define(badmap(V, F, Args), {'EXIT', {{badmap,V}, [{maps,F,Args,_}|_]}}).
@@ -153,7 +159,13 @@ all() ->
      %% cover more code
      t_bif_map_find,
      t_fold_3, t_from_keys, t_map_2, t_maps_take_2,
-     t_update_with_3, t_update_with_4, t_with_2
+     t_update_with_3, t_update_with_4, t_with_2,
+
+     %% miscellaneous
+     t_conflicting_destinations,
+     t_cse_assoc,
+     shared_key_tuples,
+     map_aliases
     ].
 
 groups() -> [].
@@ -2497,6 +2509,100 @@ t_bif_map_find(Config) when is_list(Config) ->
 		      {'EXIT',{{badmap,T},[{maps,find,_,_}|_]}} =
 			  catch maps:find(a, T)
 	      end),
+    ok.
+
+t_conflicting_destinations(_Config) ->
+    {'EXIT',{function_clause,_}} =
+        catch do_conflicts(#{{tag,whatever} => true}),
+    {'EXIT',{function_clause,_}} =
+        catch do_conflicts(#{[something] => 42}),
+    {'EXIT',{function_clause,_}} =
+        catch do_conflicts(#{{tag,whatever} => true,
+                             #{} => <<0>>,
+                             [something] => 42}),
+    ok.
+
+do_conflicts(#{{tag,whatever} := true,
+               #{} := <<bad_integer,0:(is_integer(a))>>} =
+                 #{[something] := 42}) ->
+    ok.
+
+t_cse_assoc(_Config) ->
+    {'EXIT',{{case_clause,#{key:=any}},_}} = catch do_cse_assoc(id(any)),
+
+    {'EXIT',{{case_clause,#{key:=value}},_}} = catch do_cse_assoc(id(#{}), id(value)),
+    42 = do_cse_assoc(id(#{assoc => 42}), id(any)),
+
+    ok.
+
+do_cse_assoc(V) ->
+    case #{key => V} of
+        #{assoc := Assoc} ->
+            %% The CSE optimization would consider the first two arguments in
+            %% the argument for `put_map` to be the key `alloc` and the value
+            %% `#{}`.
+            Assoc
+    end.
+
+do_cse_assoc(M, V) ->
+    case M#{key => V} of
+        #{assoc := Assoc} ->
+            Assoc
+    end.
+
+shared_key_tuples(_Config) ->
+    A = decimal(0),
+    B = decimal(1),
+
+    case ?MODULE of
+        map_inline_SUITE ->
+            %% With inlining, two separate map literals will be created. They
+            %% will not share keys.
+            ok;
+        _ ->
+            %% The two instances should share the key tuple.
+            true = erts_debug:same(erts_internal:map_to_tuple_keys(A),
+                                   erts_internal:map_to_tuple_keys(B))
+    end,
+    ok.
+
+decimal(Int) ->
+    #{type => decimal, int => Int, exp => 0}.
+
+%% GH-6348/OTP-18297: Extend parallel matching of maps.
+map_aliases(_Config) ->
+    F1 = fun(M) ->
+                 #{K := V} = #{k := {a,K}} = M,
+                 V
+         end,
+    value = F1(id(#{k => {a,key}, key => value})),
+
+    F2 = fun(#{} = #{}) -> ok end,
+    ok = F2(id(#{})),
+    ok = F2(id(#{key => whatever})),
+
+    F3 = fun(#{a := V} = #{}) -> V end,
+    {a,b,c} = F3(id(#{a => {a,b,c}})),
+
+    F4 = fun(Map) ->
+                 [#{Key := Value} | _] = [_ | Key] = id(Map),
+                 Value
+         end,
+    bar = F4([#{foo => bar} | foo]),
+
+    F5 = fun(Map) ->
+                 {#{Key := Value}, _} = {_, Key} = id(Map),
+                 Value
+         end,
+    light = F5({#{frotz => light}, frotz}),
+
+    F6 = fun(E) ->
+                 #{Y := _} = (Y = ((_ = X) = E))
+         end,
+    {'EXIT',{{badmatch,0},_}} = catch F6(id(0)),
+    {'EXIT',{{badmatch,#{}},_}} = catch F6(id(#{})),
+    {'EXIT',{{badmatch,#{key := value}},_}} = catch F6(id(#{key => value})),
+
     ok.
 
 %% aux

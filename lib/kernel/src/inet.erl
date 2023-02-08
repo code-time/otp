@@ -952,9 +952,10 @@ stats() ->
 %% Available options for tcp:connect
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 connect_options() ->
-    [tos, tclass, priority, reuseaddr, keepalive, linger, nodelay,
-     sndbuf, recbuf,
-     recvtos, recvtclass, ttl, recvttl,
+    [debug,
+     tos, tclass, priority, reuseaddr, reuseport, reuseport_lb,
+     exclusiveaddruse, keepalive,
+     linger, nodelay, sndbuf, recbuf, recvtos, recvtclass, ttl, recvttl,
      header, active, packet, packet_size, buffer, mode, deliver, line_delimiter,
      exit_on_close, high_watermark, low_watermark, high_msgq_watermark,
      low_msgq_watermark, send_timeout, send_timeout_close, delay_send, raw,
@@ -1041,8 +1042,10 @@ con_add(Name, Val, #connect_opts{} = R, Opts, AllOpts) ->
 %% Available options for tcp:listen
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 listen_options() ->
-    [tos, tclass, priority, reuseaddr, keepalive, linger, sndbuf, recbuf, nodelay,
-     recvtos, recvtclass, ttl, recvttl,
+    [debug,
+     tos, tclass,
+     priority, reuseaddr, reuseport, reuseport_lb, exclusiveaddruse, keepalive,
+     linger, sndbuf, recbuf, nodelay, recvtos, recvtclass, ttl, recvttl,
      header, active, packet, buffer, mode, deliver, backlog, ipv6_v6only,
      exit_on_close, high_watermark, low_watermark, high_msgq_watermark,
      low_msgq_watermark, send_timeout, send_timeout_close, delay_send,
@@ -1149,6 +1152,7 @@ gen_tcp_module(Opts, socket) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 udp_options() ->
     [
+     debug,
      tos, tclass,
      priority, reuseaddr, sndbuf, recbuf, header, active, buffer, mode,
      recvtos, recvtclass, ttl, recvttl, deliver, ipv6_v6only,
@@ -1199,9 +1203,20 @@ udp_opt([Opt | Opts], #udp_opts{ifaddr = IfAddr} = R, As) ->
 		    {error, badarg}
 	    end;
         {active,N} when is_integer(N), N < 32768, N >= -32768 ->
-            NOpts = lists:keydelete(active, 1, R#udp_opts.opts),
-            udp_opt(Opts, R#udp_opts { opts = [{active,N}|NOpts] }, As);
+            POpts = lists:keydelete(active, 1, R#udp_opts.opts),
+            udp_opt(Opts, R#udp_opts { opts = [{active,N}|POpts] }, As);
+
+        {Membership, {MAddr, If}}
+          when ((Membership =:= add_membership) orelse
+                (Membership =:= drop_membership)) andalso
+               (tuple_size(MAddr) =:= 4) andalso
+               ((If =:= any) orelse (tuple_size(If) =:= 4)) ->
+            MembershipOpt = {Membership, {MAddr, If, 0}},
+            POpts         = R#udp_opts.opts,
+            udp_opt(Opts, R#udp_opts{opts = [MembershipOpt|POpts]}, As);
+
 	{Name,Val} when is_atom(Name) -> udp_add(Name, Val, R, Opts, As);
+
 	_ -> {error, badarg}
     end;
 udp_opt([], #udp_opts{} = R, _SockOpts) ->
@@ -1248,6 +1263,7 @@ gen_udp_module(Opts, socket) ->
 %  (*) passing of open FDs ("fdopen") is not supported.
 sctp_options() ->
 [   % The following are generic inet options supported for SCTP sockets:
+    debug,
     mode, active, buffer, tos, tclass, ttl,
     priority, dontroute, reuseaddr, linger,
     recvtos, recvtclass, recvttl,
